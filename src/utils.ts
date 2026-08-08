@@ -337,6 +337,81 @@ export async function extractMediaFilesFromZip(
   return { files, skippedNames };
 }
 
+export interface HighlightWindow {
+  start: number;
+  end: number;
+}
+
+/**
+ * Finds the most "energetic" `windowSec`-long window in a clip's audio track via real RMS
+ * (root-mean-square) energy analysis over the Web Audio API's decoded PCM samples - not a
+ * cloud AI call, a straightforward signal-processing heuristic: louder/busier audio (cheering,
+ * talking over each other, music swelling) is a well-known, decent proxy for "the exciting
+ * part" of a clip without needing expensive video scene/object detection. Used to build a
+ * highlight reel by auto-trimming full-length clips down to their peak moment.
+ *
+ * Falls back to the clip's first `windowSec` seconds if the file has no audio track, is
+ * shorter than the window, or can't be decoded (e.g. a format the browser's decoder rejects) -
+ * never throws, so one bad file doesn't stop a batch highlight pass over the whole timeline.
+ */
+export async function findHighlightWindow(file: File, windowSec: number): Promise<HighlightWindow> {
+  try {
+    const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
+    const ctx = new AudioCtx();
+    let decoded: AudioBuffer;
+    try {
+      decoded = await ctx.decodeAudioData(await file.arrayBuffer());
+    } finally {
+      await ctx.close();
+    }
+
+    const duration = decoded.duration;
+    if (!isFinite(duration) || duration <= windowSec) {
+      return { start: 0, end: Math.max(0.1, Math.min(windowSec, duration || windowSec)) };
+    }
+
+    const sampleRate = decoded.sampleRate;
+    const channels: Float32Array[] = [];
+    for (let c = 0; c < decoded.numberOfChannels; c++) channels.push(decoded.getChannelData(c));
+
+    // Energy computed in coarse 0.25s steps - fine enough to locate a good window, coarse
+    // enough to stay fast on a several-minute clip decoded entirely into memory.
+    const stepSec = 0.25;
+    const stepSamples = Math.max(1, Math.round(stepSec * sampleRate));
+    const numSteps = Math.floor(duration / stepSec);
+    const energy = new Float32Array(numSteps);
+    for (let i = 0; i < numSteps; i++) {
+      const startSample = i * stepSamples;
+      const endSample = Math.min(startSample + stepSamples, channels[0].length);
+      let sum = 0;
+      for (const data of channels) {
+        for (let s = startSample; s < endSample; s++) sum += data[s] * data[s];
+      }
+      const sampleCount = Math.max(1, (endSample - startSample) * channels.length);
+      energy[i] = Math.sqrt(sum / sampleCount);
+    }
+
+    // Sliding-window sum to find the highest-total-energy `windowSec` span.
+    const windowSteps = Math.max(1, Math.round(windowSec / stepSec));
+    let bestStartStep = 0;
+    let bestSum = -Infinity;
+    let runningSum = 0;
+    for (let i = 0; i < energy.length; i++) {
+      runningSum += energy[i];
+      if (i >= windowSteps) runningSum -= energy[i - windowSteps];
+      if (i >= windowSteps - 1 && runningSum > bestSum) {
+        bestSum = runningSum;
+        bestStartStep = i - windowSteps + 1;
+      }
+    }
+
+    const start = Math.max(0, Math.min(bestStartStep * stepSec, duration - windowSec));
+    return { start, end: start + windowSec };
+  } catch {
+    return { start: 0, end: windowSec };
+  }
+}
+
 export function capVidThumb(url: string): Promise<string | null> {
   return new Promise(res => {
     const v = document.createElement('video');

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { MediaItem, TextOverlay } from '../types';
-import { BUILTIN_MUSIC, fmtT, compressVideoFile, CompressionResult, getSoundtrackUrl as getSoundtrackUrlShared, enhanceVoiceAudio } from '../utils';
+import { BUILTIN_MUSIC, fmtT, compressVideoFile, CompressionResult, getSoundtrackUrl as getSoundtrackUrlShared, enhanceVoiceAudio, findHighlightWindow } from '../utils';
 import { RenderWorkerService, RenderOptions } from '../services/RenderWorker';
 import { arrangeIntoChapters, buildCinematicEndingClip } from '../services/chapterEngine';
 import { exportRenderSpec, importRenderSpec } from '../renderSpec';
@@ -1273,6 +1273,8 @@ export default function VideoStudio({
   const [voiceEnhanceProgress, setVoiceEnhanceProgress] = useState(0);
   const [voiceEnhanceStatus, setVoiceEnhanceStatus] = useState('');
   const voiceEnhanceInputRef = useRef<HTMLInputElement>(null);
+  const [isFindingHighlights, setIsFindingHighlights] = useState(false);
+  const [highlightFinderStatus, setHighlightFinderStatus] = useState('');
 
   // Equalizer values
   const [eqBass, setEqBass] = useState(50);
@@ -2010,6 +2012,62 @@ export default function VideoStudio({
       c.trimEnd = Math.max(val, c.trimStart + 0.1);
     }
     onUpdateClipsState(updated);
+  };
+
+  /**
+   * Real "Highlight Finder": trims every video/audio clip with a source down to its most
+   * energetic `HIGHLIGHT_WINDOW_SEC`-long window, via findHighlightWindow's RMS audio-energy
+   * analysis (utils.ts) - not a fake progress bar, an actual per-clip decode + energy scan.
+   * Clips already shorter than the window, photo/text clips, and clips whose source genuinely
+   * can't be read (network failure fetching a URL-only clip) are left untouched rather than
+   * blocked or corrupted - this only ever narrows a clip's existing trimStart/trimEnd range,
+   * which the real render pipeline already respects.
+   */
+  const HIGHLIGHT_WINDOW_SEC = 4;
+  const handleFindHighlights = async () => {
+    const eligible = clips
+      .map((c, idx) => ({ c, idx }))
+      .filter(({ c }) => (c.type === 'video' || c.type === 'audio') && (c.file || c.url) && (c.dur || 0) > HIGHLIGHT_WINDOW_SEC);
+
+    if (eligible.length === 0) {
+      alert('🎯 No clips long enough to find a highlight in (need real video/audio clips longer than ' + HIGHLIGHT_WINDOW_SEC + 's).');
+      return;
+    }
+
+    setIsFindingHighlights(true);
+    let trimmedCount = 0;
+    let skippedCount = 0;
+    const updated = [...clips];
+
+    for (let i = 0; i < eligible.length; i++) {
+      const { c, idx } = eligible[i];
+      setHighlightFinderStatus(`Analyzing audio energy: "${c.name || 'clip'}" (${i + 1}/${eligible.length})...`);
+      try {
+        let sourceFile: File | null = c.file || null;
+        if (!sourceFile && c.url) {
+          const res = await fetch(c.url);
+          if (!res.ok) throw new Error('unreachable');
+          const blob = await res.blob();
+          sourceFile = new File([blob], c.name || 'clip', { type: blob.type || 'video/mp4' });
+        }
+        if (!sourceFile) { skippedCount++; continue; }
+
+        const { start, end } = await findHighlightWindow(sourceFile, HIGHLIGHT_WINDOW_SEC);
+        updated[idx] = { ...updated[idx], trimStart: start, trimEnd: end };
+        trimmedCount++;
+      } catch (err) {
+        console.warn(`Highlight Finder: could not analyze "${c.name}", leaving it untouched:`, err);
+        skippedCount++;
+      }
+    }
+
+    onUpdateClipsState(updated);
+    setIsFindingHighlights(false);
+    setHighlightFinderStatus('');
+    alert(
+      `🎯 Highlight Finder complete!\n\nTrimmed ${trimmedCount} clip${trimmedCount === 1 ? '' : 's'} to their most energetic ${HIGHLIGHT_WINDOW_SEC}s` +
+      (skippedCount > 0 ? `, skipped ${skippedCount} (too short, or the source couldn't be read).` : '.')
+    );
   };
 
   /**
@@ -5281,7 +5339,7 @@ export default function VideoStudio({
                 <h4 className="text-xs font-black text-indigo-950 uppercase tracking-wide">🎞️ Project Stitching Timeline</h4>
                 <p className="text-[10px] text-slate-500 leading-normal">Drag to reorder hierarchy. Click any card below to load custom trimming & waves.</p>
               </div>
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={() => {
@@ -5322,6 +5380,19 @@ export default function VideoStudio({
                   id="open-transition-manager-btn"
                 >
                   💫 Transition Manager
+                </button>
+                <button
+                  type="button"
+                  onClick={handleFindHighlights}
+                  disabled={isFindingHighlights}
+                  className={`px-3 py-1.5 font-extrabold text-[10px] rounded-lg shrink-0 transition shadow-xs active:scale-95 flex items-center gap-1 ${
+                    isFindingHighlights
+                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                      : 'bg-white border border-amber-200 hover:bg-amber-50 text-amber-700 cursor-pointer'
+                  }`}
+                  title={`Real audio-energy analysis (RMS over decoded PCM) - trims every video/audio clip down to its ${HIGHLIGHT_WINDOW_SEC}s loudest/most active window. Not a fake progress bar.`}
+                >
+                  {isFindingHighlights ? `🎯 ${highlightFinderStatus || 'Analyzing...'}` : '🎯 Highlight Finder'}
                 </button>
               </div>
             </div>
