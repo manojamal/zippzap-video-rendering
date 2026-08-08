@@ -1231,8 +1231,16 @@ export default function App() {
         </div>
       )}
 
-      {/* Main Workspace component renderer container */}
-      <main className="flex-grow p-4 md:p-8 max-w-7xl mx-auto w-full md:max-w-none overflow-y-auto space-y-6 relative">
+      {/* Main Workspace component renderer container.
+          NOTE: deliberately no overflow-y here. The outer shell uses min-h-screen (grows with
+          content) rather than a fixed h-screen, so this element's content was never actually
+          clipped/scrolling internally - real page scrolling has always happened at the document
+          level. `overflow-y-auto` here was a no-op for visible behavior but a real bug for any
+          descendant using `position: sticky`: any ancestor with overflow != visible establishes
+          its own scroll-container context, which sticky positioning is computed relative to -
+          since this element's own scrollTop never moves, every sticky descendant in the app
+          was silently inert (verified: getBoundingClientRect().top tracked scroll 1:1, no stick). */}
+      <main className="flex-grow p-4 md:p-8 max-w-7xl mx-auto w-full md:max-w-none space-y-6 relative">
         <AnimatePresence mode="wait">
           <motion.div
             key={currentPage}

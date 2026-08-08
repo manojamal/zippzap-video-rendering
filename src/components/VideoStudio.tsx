@@ -8048,7 +8048,11 @@ export default function VideoStudio({
 
         {/* Right column Live Canvas Preview */}
         <div id="video-studio-preview-col" className="lg:col-span-5 space-y-6">
-          
+
+          {/* Sticky preview: stays visible while the long settings column (left, or the rest of
+              this column below) scrolls past it - the "preview is always on screen" pattern from
+              the reference AI-studio-style layout, without restructuring the surrounding page. */}
+          <div className="lg:sticky lg:top-4 lg:z-10">
           <div className="bg-slate-950 border border-slate-900 rounded-3xl overflow-hidden shadow-lg select-none">
             {/* Quick aspect ratio selector bar */}
             <div className="bg-slate-900 border-b border-slate-800/80 px-4 py-2.5 flex items-center justify-between gap-2">
@@ -8151,6 +8155,7 @@ export default function VideoStudio({
                 </div>
               </div>
             </div>
+          </div>
           </div>
 
           {/* Add Subtitle text card over video */}
