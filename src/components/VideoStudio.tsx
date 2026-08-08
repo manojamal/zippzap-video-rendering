@@ -1275,6 +1275,20 @@ export default function VideoStudio({
   const voiceEnhanceInputRef = useRef<HTMLInputElement>(null);
   const [isFindingHighlights, setIsFindingHighlights] = useState(false);
   const [highlightFinderStatus, setHighlightFinderStatus] = useState('');
+  // The docked timeline strip is fixed-position, so it can visually cover whatever normal-
+  // flow content happens to render in the last ~64px of the viewport. Near the top of the
+  // page that's the tall preview card's own playback controls (confirmed live: it overlapped
+  // "Forward"/"Stop" at scroll position 0 on a typical viewport height) - rather than the
+  // reference layout's fully height-bounded 3-zone shell (a much larger restructuring), only
+  // show the strip once the user has actually scrolled past the hero/preview area, which is
+  // also exactly when they'd want it (scrolled down into the long settings column).
+  const [showDockedTimeline, setShowDockedTimeline] = useState(false);
+  useEffect(() => {
+    const handleScroll = () => setShowDockedTimeline(window.scrollY > 420);
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    handleScroll();
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
   const [bgRemoveFile, setBgRemoveFile] = useState<File | null>(null);
   const [bgRemoveBackdrop, setBgRemoveBackdrop] = useState('#FFFFFF');
   const [isRemovingBg, setIsRemovingBg] = useState(false);
@@ -5404,7 +5418,7 @@ export default function VideoStudio({
 
             {/* 🛠️ ADVANCED TIMELINE FINE-TUNING & SCRUBBING HUB */}
             {selectedClip && (
-              <div className="bg-slate-900 text-white rounded-3xl p-5 border border-slate-800 space-y-4 shadow-xl">
+              <div id="fine-tuning-workspace" className="bg-slate-900 text-white rounded-3xl p-5 border border-slate-800 space-y-4 shadow-xl">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-slate-800">
                   <div>
                     <span className="text-[9px] font-black tracking-widest text-indigo-400 uppercase">📽️ Fine-Tuning Workspace</span>
@@ -9531,6 +9545,56 @@ export default function VideoStudio({
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* 🎞️ Docked timeline strip - the real clip sequence (same clips/timelineOrder/
+          selectedClipIdx state as the "Active Stitching Timeline" reorder list above),
+          pinned to the bottom of the viewport so it's visible without scrolling back up
+          through the settings column, matching the "always-visible timeline" pattern from
+          the reference layout. Deliberately still a single sequential strip (not fake
+          parallel tracks) - ZippZap's actual data model is one ordered clip list plus a
+          separate global soundtrack/overlays, not simultaneous video+audio+overlay tracks,
+          and a docked strip that pretended otherwise would misrepresent what render
+          actually does. Clicking a thumbnail jumps to that clip's real editor below. */}
+      {!isFullscreen && clips.length > 0 && showDockedTimeline && (
+        <div className="hidden md:block fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-md border-t border-slate-800 shadow-2xl">
+          <div className="max-w-7xl mx-auto px-4 py-2 flex items-center gap-3">
+            <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider shrink-0">🎞️ Timeline</span>
+            <div className="flex-1 flex items-center gap-1.5 overflow-x-auto py-1">
+              {timelineOrder.map((clipIdx, pos) => {
+                const c = clips[clipIdx];
+                if (!c) return null;
+                const isSelected = selectedClipIdx === clipIdx;
+                const typeEmoji = c.type === 'video' ? '🎬' : c.type === 'photo' ? '📸' : c.type === 'audio' ? '🎙️' : '✍️';
+                return (
+                  <button
+                    key={c.id || clipIdx}
+                    type="button"
+                    onClick={() => {
+                      setSelectedClipIdx(clipIdx);
+                      setClipScrubTime(0);
+                      document.getElementById('fine-tuning-workspace')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }}
+                    title={`${c.name || 'Clip'} (${fmtT(c.dur || 0)})`}
+                    className={`shrink-0 relative w-14 h-10 rounded-lg overflow-hidden border-2 transition cursor-pointer ${
+                      isSelected ? 'border-indigo-500 ring-2 ring-indigo-400/50' : 'border-slate-700 hover:border-slate-500'
+                    }`}
+                  >
+                    {c.thumb ? (
+                      <img src={c.thumb} alt="" className="w-full h-full object-cover" loading="lazy" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center bg-slate-800 text-sm">{typeEmoji}</div>
+                    )}
+                    <span className="absolute top-0 left-0.5 text-[7px] font-mono font-bold text-slate-300 drop-shadow">{pos + 1}</span>
+                    <span className="absolute bottom-0 right-0 px-0.5 bg-black/70 text-[7px] text-white font-mono">{fmtT(c.dur || 0)}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <span className="shrink-0 text-[9px] font-mono text-slate-400">{clips.length} clip{clips.length === 1 ? '' : 's'} · {fmtT(totalDuration)}</span>
+          </div>
+        </div>
+      )}
+      {!isFullscreen && clips.length > 0 && showDockedTimeline && <div className="hidden md:block h-16" aria-hidden="true" />}
 
     </div>
   );
