@@ -1,0 +1,7 @@
+{
+  "name": "onnxruntime-node",
+  "version": "1.24.3",
+  "description": "No-op stub: this app is browser-only and never uses the Node.js ONNX Runtime backend. This stub exists purely to prevent npm from downloading the real package's native binary (which requires network access to api.nuget.org) during install, since it is never imported by any browser bundle in this project.",
+  "main": "index.js",
+  "license": "MIT"
+}

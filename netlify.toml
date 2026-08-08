@@ -1,0 +1,68 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    # Enables window.crossOriginIsolated, which unlocks the multi-threaded ffmpeg core
+    # (2-4x faster rendering) and multi-threaded ONNX Runtime (faster STT/TTS inference).
+    # Tradeoff: any cross-origin resource this app loads (e.g. soundtrack previews fetched
+    # from third-party URLs) must respond with CORS or Cross-Origin-Resource-Policy headers
+    # or it will be blocked. The app already treats those fetches as best-effort/optional
+    # (falls back gracefully if unreachable), and "credentialless" mode (used below, instead
+    # of the stricter "require-corp") does not require third-party servers to opt in at all -
+    # but verify soundtrack/model-download behavior after deploying, since this couldn't be
+    # tested live in the environment this was built in.
+    Cross-Origin-Opener-Policy = "same-origin"
+    Cross-Origin-Embedder-Policy = "credentialless"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(self), microphone=(self), display-capture=(self), geolocation=()"
+    # Content-Security-Policy - deliberately scoped to exactly what this app uses, not a
+    # generic wildcard policy. Covers: self-hosted ffmpeg/ONNX WASM engines (worker-src/
+    # script-src 'wasm-unsafe-eval'), Google Fonts (style/font-src), Hugging Face's model
+    # CDN for Whisper/Piper weights (connect-src), SoundHelix demo soundtracks (connect-src/
+    # media-src), the Supabase backend (REST/Auth/Storage over https + Realtime over wss),
+    # and blob: URLs (used extensively for local recordings/renders/uploads).
+    # NOTE: this could not be tested against a live browser in the environment it was built
+    # in - if you see anything break after deploying, check the browser console for CSP
+    # violation messages first; they'll name the exact directive to loosen.
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob: https://www.soundhelix.com; connect-src 'self' blob: data: https://huggingface.co https://*.huggingface.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co https://www.soundhelix.com https://*.supabase.co wss://*.supabase.co; manifest-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+
+[[headers]]
+  for = "/ffmpeg/ffmpeg-core.wasm"
+  [headers.values]
+    Content-Type = "application/wasm"
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/ffmpeg/ffmpeg-core.js"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/ffmpeg-mt/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/fonts/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/manifest.webmanifest"
+  [headers.values]
+    Cache-Control = "public, max-age=3600"
