@@ -549,3 +549,84 @@ export async function compressVideoFile(
   }
 }
 
+export interface VoiceEnhanceResult {
+  enhancedFile: File;
+  originalDur: number;
+}
+
+/**
+ * Real client-side voice cleanup, in the spirit of dedicated tools like voiceenhancer.ai but
+ * fully local (no upload to any server): adaptive FFT noise reduction (ffmpeg's `afftdn`), a
+ * highpass filter to cut low-frequency rumble/hum below the speech range, and loudness
+ * normalization to the same broadcast target (`I=-16:TP=-1.5:LRA=11`) already used for
+ * per-clip audio elsewhere in this app. Works on the audio track of a video file too - video,
+ * if any, is dropped and only a cleaned-up audio file comes out, matching every other tool in
+ * the Advanced Media Processing Desk's Audio tab (all audio in, audio out).
+ */
+export async function enhanceVoiceAudio(
+  file: File,
+  strength: 'light' | 'medium' | 'strong',
+  onProgress: (progress: number, statusText: string) => void
+): Promise<VoiceEnhanceResult> {
+  const { getFFmpeg, toUint8Array } = await import('./services/ffmpegService');
+
+  const noiseFloorByStrength: Record<'light' | 'medium' | 'strong', number> = {
+    light: -30, medium: -25, strong: -20,
+  };
+  const nf = noiseFloorByStrength[strength];
+
+  onProgress(2, '🔍 Booting up local audio engine (WebAssembly FFmpeg)...');
+  const ffmpeg = await getFFmpeg();
+
+  const removeProgressListener = () => {
+    // @ts-ignore - off() exists at runtime even if types lag behind
+    ffmpeg.off?.('progress');
+  };
+  ffmpeg.on('progress', ({ progress }) => {
+    onProgress(Math.min(99, Math.max(3, Math.round(progress * 100))), '🎚️ Reducing background noise and normalizing levels...');
+  });
+
+  const inputExt = (file.name.split('.').pop() || 'mp3').toLowerCase();
+  const inName = `enhance_in.${/^[a-z0-9]+$/.test(inputExt) ? inputExt : 'mp3'}`;
+  const outName = 'enhance_out.mp3';
+
+  try {
+    const bytes = await toUint8Array(file);
+    await ffmpeg.writeFile(inName, bytes);
+
+    await ffmpeg.exec([
+      '-i', inName,
+      '-vn',
+      '-af', `highpass=f=80,afftdn=nf=${nf},loudnorm=I=-16:TP=-1.5:LRA=11`,
+      '-c:a', 'libmp3lame', '-b:a', '192k',
+      outName,
+    ]);
+
+    const data = await ffmpeg.readFile(outName);
+    const uint8 = data instanceof Uint8Array ? data : new Uint8Array(data as unknown as ArrayBuffer);
+    const blob = new Blob([uint8], { type: 'audio/mpeg' });
+    const enhancedFile = new File(
+      [blob],
+      file.name.replace(/\.[^.]+$/, '') + '_enhanced.mp3',
+      { type: 'audio/mpeg', lastModified: Date.now() }
+    );
+
+    // Real duration of the cleaned-up file, read back the same way TTS narration does.
+    let originalDur = 5;
+    try {
+      const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioCtx();
+      const decoded = await ctx.decodeAudioData(await enhancedFile.arrayBuffer());
+      originalDur = decoded.duration;
+      await ctx.close();
+    } catch { /* fall back to the default above */ }
+
+    onProgress(100, '✨ Voice enhancement complete!');
+    return { enhancedFile, originalDur };
+  } finally {
+    removeProgressListener();
+    try { await ffmpeg.deleteFile(inName); } catch { /* ignore */ }
+    try { await ffmpeg.deleteFile(outName); } catch { /* ignore */ }
+  }
+}
+

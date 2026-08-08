@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { MediaItem, TextOverlay } from '../types';
-import { BUILTIN_MUSIC, fmtT, compressVideoFile, CompressionResult, getSoundtrackUrl as getSoundtrackUrlShared } from '../utils';
+import { BUILTIN_MUSIC, fmtT, compressVideoFile, CompressionResult, getSoundtrackUrl as getSoundtrackUrlShared, enhanceVoiceAudio } from '../utils';
 import { RenderWorkerService, RenderOptions } from '../services/RenderWorker';
 import { arrangeIntoChapters, buildCinematicEndingClip } from '../services/chapterEngine';
 import { exportRenderSpec, importRenderSpec } from '../renderSpec';
@@ -1267,6 +1267,12 @@ export default function VideoStudio({
   const [ttsInput, setTtsInput] = useState('');
   const [ttsAccent, setTtsAccent] = useState('us-warm');
   const [ttsGenerating, setTtsGenerating] = useState(false);
+  const [voiceEnhanceFile, setVoiceEnhanceFile] = useState<File | null>(null);
+  const [voiceEnhanceStrength, setVoiceEnhanceStrength] = useState<'light' | 'medium' | 'strong'>('medium');
+  const [isEnhancingVoice, setIsEnhancingVoice] = useState(false);
+  const [voiceEnhanceProgress, setVoiceEnhanceProgress] = useState(0);
+  const [voiceEnhanceStatus, setVoiceEnhanceStatus] = useState('');
+  const voiceEnhanceInputRef = useRef<HTMLInputElement>(null);
 
   // Equalizer values
   const [eqBass, setEqBass] = useState(50);
@@ -1445,7 +1451,7 @@ export default function VideoStudio({
   const [simProgress, setSimProgress] = useState(0);
 
   // States for AI Auto-Timeline compilation and importer
-  const [aiMood, setAiMood] = useState<'hype' | 'nostalgia' | 'modern'>('hype');
+  const [aiMood, setAiMood] = useState<'hype' | 'nostalgia' | 'modern' | 'cinematic'>('hype');
   const [isCompilingAi, setIsCompilingAi] = useState(false);
   const [aiCompileProgress, setAiCompileProgress] = useState(0);
   const [aiCompileStatus, setAiCompileStatus] = useState('');
@@ -4748,11 +4754,12 @@ export default function VideoStudio({
               <label className="block text-[10px] font-black uppercase text-indigo-300 tracking-wider">
                 Select AI Assistant Aesthetic Direction
               </label>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
                 {[
                   { id: 'hype', title: 'High-Energy Hype Mix 🥁', desc: 'Active slide transitions, rainbow border neon frames, dance soundtrack, vibrant filter', border: 'border-amber-500/30' },
                   { id: 'nostalgia', title: 'Tear-Jerker Nostalgia 🥺', desc: 'Broad slow crossfade, elegant classic Polaroids, acoustic backing tracks, sepia grading', border: 'border-rose-500/30' },
-                  { id: 'modern', title: 'Modern Clean Minimal ✨', desc: 'Straight cut layouts, pristine typography cards, lofi ambient soundtrack, grayscale film look', border: 'border-emerald-500/30' }
+                  { id: 'modern', title: 'Modern Clean Minimal ✨', desc: 'Straight cut layouts, pristine typography cards, lofi ambient soundtrack, clean cinematic grade', border: 'border-emerald-500/30' },
+                  { id: 'cinematic', title: 'Cinematic Film Look 🎬', desc: 'Slow crossfades, letterboxed widescreen bars, orchestral strings score, vignette + filmic grade', border: 'border-sky-500/30' }
                 ].map(vibe => {
                   const isActive = aiMood === vibe.id;
                   return (
@@ -4854,7 +4861,7 @@ export default function VideoStudio({
                         style: w.style || 'gradient',
                         trimStart: 0,
                         trimEnd: clipDur,
-                        transition: aiMood === 'hype' ? 'slide' : aiMood === 'nostalgia' ? 'fade' : 'none',
+                        transition: aiMood === 'hype' ? 'slide' : (aiMood === 'nostalgia' || aiMood === 'cinematic') ? 'fade' : 'none',
                         isTranscribedVoice: isVoiceToText,
                         backgroundReplace: (w as any).backgroundReplace || 'none',
                         faceCentering: !!(w as any).faceCentering
@@ -4913,6 +4920,7 @@ export default function VideoStudio({
                       setColorGrade('cyberpunk');
                       setWaveformStyle('cyber_bars');
                       setShowLiveAudioWaveform(true);
+                      setFitMode('cover');
                     } else if (aiMood === 'nostalgia') {
                       setActiveVideoFilter('sepia');
                       setAnimatedFrame('vintage');
@@ -4920,6 +4928,19 @@ export default function VideoStudio({
                       setColorGrade('sepia');
                       setWaveformStyle('wave');
                       setShowLiveAudioWaveform(true);
+                      setFitMode('cover');
+                    } else if (aiMood === 'cinematic') {
+                      // Real filmic look: vignette + the 'cinematic' color grade (both mapped to
+                      // genuine ffmpeg filters in RenderWorker.ts), letterboxed via fitMode='contain'
+                      // (scale-to-fit + real letterbox padding, not a fake overlay bar), the one
+                      // built-in track actually tagged "Cinematic" (bm4, orchestral strings), and no
+                      // waveform overlay - a clean frame reads more "film" than a visualizer does.
+                      setActiveVideoFilter('vignette');
+                      setAnimatedFrame('none');
+                      setSoundtrackId('bm4');
+                      setColorGrade('cinematic');
+                      setShowLiveAudioWaveform(false);
+                      setFitMode('contain');
                     } else {
                       setActiveVideoFilter('none');
                       setAnimatedFrame('none');
@@ -4927,6 +4948,7 @@ export default function VideoStudio({
                       setColorGrade('cinematic');
                       setWaveformStyle('spectrum');
                       setShowLiveAudioWaveform(true);
+                      setFitMode('cover');
                     }
 
                     onUpdateClipsState(compiledList);
@@ -6766,6 +6788,102 @@ export default function VideoStudio({
                         {ttsGenerating ? '🗣️ Synthesizing...' : '＋ Generate TTS'}
                       </button>
                     </div>
+                  </div>
+
+                  {/* Voice Enhancer - real client-side noise reduction + normalization (ffmpeg
+                      afftdn/highpass/loudnorm), no upload to any server. Adds the cleaned-up
+                      result as a new audio clip on the timeline, same pattern as every other
+                      tool in this panel. */}
+                  <div className="p-3.5 bg-slate-50 border border-slate-150 rounded-xl space-y-2.5">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] font-black text-indigo-600 uppercase tracking-wider">🧼 Voice Enhancer</span>
+                      <span className="text-[8px] bg-emerald-50 text-emerald-700 px-1.5 py-0.2 rounded font-black">NOISE REMOVAL</span>
+                    </div>
+                    <p className="text-[10.5px] text-slate-500">Clean up background noise and even out levels on any voice recording or video's audio track.</p>
+
+                    <input
+                      type="file"
+                      ref={voiceEnhanceInputRef}
+                      accept="audio/*,video/*"
+                      className="hidden"
+                      onChange={e => {
+                        const f = e.target.files?.[0];
+                        if (f) setVoiceEnhanceFile(f);
+                        e.target.value = '';
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => voiceEnhanceInputRef.current?.click()}
+                      className="w-full bg-white border border-slate-200 hover:border-indigo-400 rounded-lg p-2 text-[10.5px] font-bold text-slate-600 text-left truncate"
+                    >
+                      {voiceEnhanceFile ? `📄 ${voiceEnhanceFile.name}` : '📂 Choose an audio or video file...'}
+                    </button>
+
+                    <div className="flex justify-between items-center gap-2">
+                      <select
+                        value={voiceEnhanceStrength}
+                        onChange={e => setVoiceEnhanceStrength(e.target.value as any)}
+                        className="bg-white border border-slate-150 rounded-lg p-1.5 font-bold h-7.5 outline-none text-[10.5px]"
+                      >
+                        <option value="light">🪶 Light (preserve ambience)</option>
+                        <option value="medium">⚖️ Medium (balanced)</option>
+                        <option value="strong">🧹 Strong (max noise removal)</option>
+                      </select>
+                      <button
+                        type="button"
+                        disabled={!voiceEnhanceFile || isEnhancingVoice}
+                        onClick={async () => {
+                          if (!voiceEnhanceFile) return;
+                          setIsEnhancingVoice(true);
+                          setVoiceEnhanceProgress(0);
+                          setVoiceEnhanceStatus('Starting...');
+                          try {
+                            const { enhancedFile, originalDur } = await enhanceVoiceAudio(
+                              voiceEnhanceFile,
+                              voiceEnhanceStrength,
+                              (prog, status) => {
+                                setVoiceEnhanceProgress(prog);
+                                setVoiceEnhanceStatus(status);
+                              }
+                            );
+                            const url = URL.createObjectURL(enhancedFile);
+                            const item = {
+                              id: 'enhanced_' + Date.now(),
+                              sourceMediaId: 'enhanced_' + Date.now(),
+                              type: 'audio',
+                              file: enhancedFile,
+                              url,
+                              dur: originalDur,
+                              name: `Enhanced: ${voiceEnhanceFile.name}`,
+                              from: 'Me (Voice Enhancer)',
+                              textBody: '',
+                              style: 'gradient',
+                              trimStart: 0,
+                              trimEnd: originalDur,
+                              transition: 'fade'
+                            };
+                            onUpdateClipsState([...clips, item]);
+                            onUpdateTimelineState([...timelineOrder, clips.length]);
+                            setVoiceEnhanceFile(null);
+                            alert('🧼 Real noise reduction applied! The cleaned-up audio has been appended to the timeline.');
+                          } catch (err: any) {
+                            console.error('Voice enhancement failed:', err);
+                            alert(`❌ Could not enhance this audio: ${err?.message || err}`);
+                          } finally {
+                            setIsEnhancingVoice(false);
+                          }
+                        }}
+                        className={`px-3 py-1.5 h-7.5 rounded-lg text-white font-extrabold transition cursor-pointer flex items-center justify-center whitespace-nowrap ${
+                          !voiceEnhanceFile || isEnhancingVoice ? 'bg-indigo-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'
+                        }`}
+                      >
+                        {isEnhancingVoice ? `🧼 ${voiceEnhanceProgress}%` : '＋ Enhance Audio'}
+                      </button>
+                    </div>
+                    {isEnhancingVoice && (
+                      <p className="text-[9px] text-slate-400 italic">{voiceEnhanceStatus}</p>
+                    )}
                   </div>
 
                   {/* Microphone Recorder Card */}
