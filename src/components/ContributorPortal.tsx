@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { CP_ACCOUNTS, validateUploadFileSize, validateFileSignature, checkSubmissionRateLimit, recordSubmission } from '../utils';
 import { MediaItem } from '../types';
-import { generateContributorWish } from '../services/aiService';
 import { submitContribution } from '../services/campaignApi';
 
 interface ContributorPortalProps {
@@ -489,6 +488,7 @@ export default function ContributorPortal({
     setAiWishLoading(true);
     setAiWishStatus('Loading AI writing model...');
     try {
+      const { generateContributorWish } = await import('../services/aiService');
       const style = AI_WISH_STYLES[Math.floor(Math.random() * AI_WISH_STYLES.length)];
       const text = await generateContributorWish(
         celebrantName || 'Friend',

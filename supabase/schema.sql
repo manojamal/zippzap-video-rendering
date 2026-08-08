@@ -143,9 +143,21 @@ drop policy if exists "campaign_owner_all" on public.campaigns;
 create policy "campaign_owner_all" on public.campaigns
   for all using (organizer_id = auth.uid()) with check (organizer_id = auth.uid());
 
+-- REMOVED: "campaign_public_read_by_slug" used to grant `for select using (true)` -
+-- i.e. it made every column of every organizer's campaign row (title, celebrant name,
+-- event date, organizer_id, pipeline stage) readable by any client holding the public
+-- anon key, completely unscoped by invite_slug despite the policy's name. Audited: no
+-- code path in the app actually queries campaigns filtered by invite_slug (the
+-- contributor portal is reached via eventId, not the slug), so this policy had zero
+-- functional purpose. It also leaked into organizer-only queries like "fetch my own
+-- campaigns" (campaignApi.ts), since Postgres combines multiple permissive SELECT
+-- policies with OR - meaning even that legitimate, correctly-scoped query would have
+-- returned every organizer's campaigns, not just the caller's own, for as long as this
+-- policy existed alongside "campaign_owner_all" below. If a real public-by-link lookup
+-- is added later, scope it narrowly - e.g. a SECURITY DEFINER RPC function that takes
+-- the slug as a parameter and returns only the specific matching row (the same pattern
+-- already used for handle_new_organizer above), not a blanket table-wide SELECT policy.
 drop policy if exists "campaign_public_read_by_slug" on public.campaigns;
-create policy "campaign_public_read_by_slug" on public.campaigns
-  for select using (true);
 
 drop policy if exists "invite_owner_all" on public.invites;
 create policy "invite_owner_all" on public.invites

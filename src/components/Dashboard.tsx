@@ -1,7 +1,6 @@
 import React from 'react';
 import { CelebrativeEvent, ActivityFeedItem, MediaItem } from '../types';
 import { PIPELINE_STAGES, fmtT, daysTo } from '../utils';
-import { generateNudgeMessage, classifyWishTone } from '../services/aiService';
 import { generateQrDataUrl } from '../services/qrService';
 import { getSnapshots, saveSnapshot, restoreSnapshot, deleteSnapshot, SnapshotMeta } from '../versionHistory';
 
@@ -264,6 +263,10 @@ export default function Dashboard({
       Heartfelt: [], Funny: [], Milestone: [], General: [],
     };
 
+    // Lazily import so the ~530KB @huggingface/transformers dependency it pulls in is only
+    // ever fetched by someone who actually clicks this AI feature - not by everyone who
+    // just loads the dashboard.
+    const { classifyWishTone } = await import('../services/aiService');
     for (let i = 0; i < eligible.length; i++) {
       const wish = eligible[i];
       setStructuringStatus(`Reading tone of wish ${i + 1} of ${eligible.length}...`);
@@ -855,6 +858,7 @@ export default function Dashboard({
                           setAiNudgeLoading(true);
                           setAiNudgeStatus('Loading AI writing model...');
                           try {
+                            const { generateNudgeMessage } = await import('../services/aiService');
                             const portalLink = `https://zippzap.ng/portal/${activeEvent.id}`;
                             const greetMsg = await generateNudgeMessage(
                               activeEvent.cel,

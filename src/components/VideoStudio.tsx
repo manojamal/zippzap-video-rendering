@@ -9556,7 +9556,7 @@ export default function VideoStudio({
           and a docked strip that pretended otherwise would misrepresent what render
           actually does. Clicking a thumbnail jumps to that clip's real editor below. */}
       {!isFullscreen && clips.length > 0 && showDockedTimeline && (
-        <div className="hidden md:block fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-md border-t border-slate-800 shadow-2xl">
+        <div className="fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-md border-t border-slate-800 shadow-2xl">
           <div className="max-w-7xl mx-auto px-4 py-2 flex items-center gap-3">
             <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider shrink-0">🎞️ Timeline</span>
             <div className="flex-1 flex items-center gap-1.5 overflow-x-auto py-1">
@@ -9594,7 +9594,7 @@ export default function VideoStudio({
           </div>
         </div>
       )}
-      {!isFullscreen && clips.length > 0 && showDockedTimeline && <div className="hidden md:block h-16" aria-hidden="true" />}
+      {!isFullscreen && clips.length > 0 && showDockedTimeline && <div className="h-16" aria-hidden="true" />}
 
     </div>
   );
