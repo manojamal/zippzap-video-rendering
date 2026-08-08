@@ -23,7 +23,12 @@ test.describe('Core app shell', () => {
     await page.goto('/');
     await expect(page.getByText('Fast Entry Profiles')).toBeVisible({ timeout: 15000 });
 
-    expect(consoleErrors, `Unexpected console errors:\n${consoleErrors.join('\n')}`).toHaveLength(0);
+    // "Missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY" is an intentional, by-design
+    // console.error (see supabaseClient.ts) that fires whenever Supabase isn't configured -
+    // the default state for CI, a fresh clone, or anyone who hasn't set up their own project.
+    // It's not a bug to catch here; filter it out rather than requiring CI to fake credentials.
+    const unexpectedErrors = consoleErrors.filter((e) => !e.includes('Missing VITE_SUPABASE_URL'));
+    expect(unexpectedErrors, `Unexpected console errors:\n${unexpectedErrors.join('\n')}`).toHaveLength(0);
   });
 
   test('quick-login as a demo account reaches the dashboard', async ({ page }) => {
@@ -73,20 +78,32 @@ test.describe('Video Studio - core stitching flow', () => {
     const fileInput = page.getByTestId('studio-main-upload-input');
     await fileInput.setInputFiles(TEST_CLIP);
 
-    // The uploaded clip should now appear as a timeline entry (named after the file).
-    await expect(page.getByText('test-clip')).toBeVisible({ timeout: 10000 });
+    // The uploaded clip should now appear as a timeline entry (named after the file). A plain
+    // text match is ambiguous once a clip is loaded - the name legitimately appears 3+ times
+    // at once (the timeline list item, the "Editing clip:" fine-tuning heading, and a wizard's
+    // clip-picker <option>) - so assert the specific timeline-list heading instead.
+    await expect(page.getByRole('heading', { name: 'test-clip.mp4', exact: true })).toBeVisible({ timeout: 10000 });
   });
 
   test('render button is disabled or absent with an empty timeline', async ({ page }) => {
-    // Guards against the render pipeline being triggered with zero clips.
-    const renderButton = page.getByRole('button', { name: /Stitch & Render|Start Render/i }).first();
-    if (await renderButton.count() > 0) {
-      await expect(renderButton).toBeDisabled().catch(async () => {
-        // If it's not disabled, clicking it with an empty timeline should show a
-        // friendly message rather than attempting to render nothing.
-        await renderButton.click();
-        await expect(page.getByText(/add at least one clip/i)).toBeVisible({ timeout: 5000 });
-      });
+    // Guards against the render pipeline being triggered with zero clips. This app's
+    // empty-timeline guards use a native window.alert(), not inline page text - so this
+    // must capture the dialog event, not getByText (which would never find it: alert()
+    // content never becomes part of the page's DOM). A page.on('dialog', ...) handler
+    // registered before the click is the reliable pattern here - racing a bare
+    // page.waitForEvent('dialog') against locator.click() left the click itself hanging
+    // until Playwright's default action timeout in practice.
+    let dialogMessage: string | null = null;
+    page.on('dialog', async (dialog) => {
+      dialogMessage = dialog.message();
+      await dialog.accept();
+    });
+
+    const renderButton = page.getByRole('button', { name: /Stitch & Render/i }).first();
+    if (await renderButton.count() > 0 && !(await renderButton.isDisabled())) {
+      await renderButton.click();
+      await expect.poll(() => dialogMessage, { timeout: 5000 }).not.toBeNull();
+      expect(dialogMessage!.toLowerCase()).toMatch(/empty|add at least one clip/);
     }
   });
 });

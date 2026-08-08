@@ -1062,6 +1062,7 @@ export default function VideoStudio({
         outputFormat: EXPORT_FORMAT_MAP[exportFormat] || 'mp4',
         quality: EXPORT_QUALITY_MAP[exportQuality] || 'balanced',
         masterVolume: masterVideoVolume,
+        eq: { bass: eqBass - 50, mid: eqMid - 50, treble: eqTreble - 50 },
         brandColor: brand?.brandColor,
         brandLogoDataUrl: brand?.brandLogoDataUrl,
         // Real MP4 chapter markers from the bookmarks added via "🔖 Add Chapter" / the M
@@ -3691,6 +3692,7 @@ export default function VideoStudio({
         outputFormat: EXPORT_FORMAT_MAP[exportFormat] || 'mp4',
         quality: EXPORT_QUALITY_MAP[exportQuality] || 'balanced',
         masterVolume: masterVideoVolume,
+        eq: { bass: eqBass - 50, mid: eqMid - 50, treble: eqTreble - 50 },
         brandColor: brand?.brandColor,
         brandLogoDataUrl: brand?.brandLogoDataUrl,
         markers: (EXPORT_FORMAT_MAP[exportFormat] || 'mp4') === 'mp4' && markers.length > 0
@@ -7099,7 +7101,7 @@ export default function VideoStudio({
                 <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-4">
                   <div className="flex justify-between items-center">
                     <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">🎚️ 3-Band Parametric Equalizer (EQ)</span>
-                    <span className="text-[9.5px] text-indigo-600 font-extrabold">LIVE DECORATOR MODULATORS</span>
+                    <span className="text-[9.5px] text-emerald-600 font-extrabold">APPLIED TO FINAL MIX</span>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4">
@@ -7115,6 +7117,7 @@ export default function VideoStudio({
                         max="100"
                         value={eqBass}
                         onChange={e => setEqBass(parseInt(e.target.value))}
+                        data-testid="eq-bass-slider"
                         className="w-full accent-indigo-600 cursor-pointer block"
                       />
                     </div>

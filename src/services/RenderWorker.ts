@@ -38,6 +38,10 @@ export interface RenderOptions {
    * making a "master volume" control that's applied per-clip largely inaudible in practice.
    */
   masterVolume?: number;
+  /** Final-mix 3-band EQ gain in dB (typically -50..+50, matching the UI slider's range). Only
+   *  the bands that differ from 0 add a real ffmpeg filter - applying `bass=g=0:treble=g=0`
+   *  unconditionally would still cost a re-encode pass for no audible effect. */
+  eq?: { bass: number; mid: number; treble: number };
   /** Automatically lowers the soundtrack under speech, using each clip's Whisper caption timings. Default: true when captions exist. */
   autoDuck?: boolean;
   /** White-label branding applied to auto-generated text cards (intro/outro/section titles). */
@@ -1032,19 +1036,29 @@ export class RenderWorkerService {
         }
       }
 
-      // Global output gain - see the RenderOptions.masterVolume doc comment for why this runs
-      // as its own final mixdown pass rather than folding into the per-clip volume filter.
+      // Global output gain and 3-band EQ - see the RenderOptions doc comments for why these run
+      // as one final mixdown pass rather than folding into the per-clip volume filter. Combined
+      // into a single ffmpeg pass (rather than one exec per adjustment) so a video with both set
+      // only pays for one extra re-encode, not two.
+      const finalMixFilters: string[] = [];
       if (options.masterVolume !== undefined && options.masterVolume !== 100) {
-        report(89, 'Applying master volume...');
+        finalMixFilters.push(`volume=${(Math.max(0, options.masterVolume) / 100).toFixed(2)}`);
+      }
+      if (options.eq && (options.eq.bass !== 0 || options.eq.mid !== 0 || options.eq.treble !== 0)) {
+        if (options.eq.bass !== 0) finalMixFilters.push(`bass=g=${options.eq.bass.toFixed(1)}`);
+        if (options.eq.treble !== 0) finalMixFilters.push(`treble=g=${options.eq.treble.toFixed(1)}`);
+        if (options.eq.mid !== 0) finalMixFilters.push(`equalizer=f=1000:width_type=o:width=2:g=${options.eq.mid.toFixed(1)}`);
+      }
+      if (finalMixFilters.length > 0) {
+        report(89, 'Applying master volume/EQ...');
         try {
-          const gain = Math.max(0, options.masterVolume) / 100;
-          const volName = 'master_vol.mp4';
-          await ffmpeg.exec(['-i', finalName, '-c:v', 'copy', '-af', `volume=${gain.toFixed(2)}`, '-c:a', 'aac', volName]);
-          this.tempFiles.push(volName);
-          finalName = volName;
-        } catch (mvErr) {
-          console.warn('Master volume adjustment failed, delivering at original level:', mvErr);
-          warnings.push('Master volume could not be applied (an unexpected ffmpeg error) - your video was still rendered, just at its original volume level.');
+          const mixedName = 'final_mix.mp4';
+          await ffmpeg.exec(['-i', finalName, '-c:v', 'copy', '-af', finalMixFilters.join(','), '-c:a', 'aac', mixedName]);
+          this.tempFiles.push(mixedName);
+          finalName = mixedName;
+        } catch (mixErr) {
+          console.warn('Master volume/EQ adjustment failed, delivering at original level:', mixErr);
+          warnings.push('Master volume/EQ could not be applied (an unexpected ffmpeg error) - your video was still rendered, just without that adjustment.');
         }
       }
 
