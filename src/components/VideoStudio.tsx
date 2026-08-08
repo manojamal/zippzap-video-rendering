@@ -1275,6 +1275,11 @@ export default function VideoStudio({
   const voiceEnhanceInputRef = useRef<HTMLInputElement>(null);
   const [isFindingHighlights, setIsFindingHighlights] = useState(false);
   const [highlightFinderStatus, setHighlightFinderStatus] = useState('');
+  const [bgRemoveFile, setBgRemoveFile] = useState<File | null>(null);
+  const [bgRemoveBackdrop, setBgRemoveBackdrop] = useState('#FFFFFF');
+  const [isRemovingBg, setIsRemovingBg] = useState(false);
+  const [bgRemoveStatus, setBgRemoveStatus] = useState('');
+  const bgRemoveInputRef = useRef<HTMLInputElement>(null);
 
   // Equalizer values
   const [eqBass, setEqBass] = useState(50);
@@ -6408,35 +6413,54 @@ export default function VideoStudio({
             </DragDropContext>
           </div>
 
-          {/* Quick Import Drawer for teammate contribution files (High comfort user helper) */}
+          {/* My Media - real thumbnail library of not-yet-imported contributions (same
+              importableMedia/handleImportMediaToStudio data already powering the plain list this
+              replaces), styled as clickable thumbnail tiles rather than a text list. */}
           <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm space-y-4">
             <div className="flex justify-between items-center border-b border-slate-50 pb-2">
-              <h3 className="text-xs font-bold text-[#1C1207] uppercase tracking-widest">📦 Quick Import from contributions</h3>
+              <h3 className="text-xs font-bold text-[#1C1207] uppercase tracking-widest">🖼️ My Media <span className="text-slate-400 font-medium normal-case">· Quick Import from Contributions</span></h3>
               <span className="text-[10px] text-indigo-600 px-2 py-0.5 bg-indigo-50 rounded-full font-black">
-                {importableMedia.length} Available Contributions
+                {importableMedia.length} Available
               </span>
             </div>
-            
+
             {importableMedia.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[240px] overflow-y-auto pr-1">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-[340px] overflow-y-auto pr-1">
                 {importableMedia.map(m => {
                   const typeEmoji = m.type === 'video' ? '📹' : m.type === 'photo' ? '📸' : m.type === 'audio' ? '🎙️' : '✍️';
                   return (
-                    <div key={m.id} className="p-3 bg-slate-50/50 border border-slate-200 rounded-xl flex justify-between items-center gap-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span>{typeEmoji}</span>
-                          <span className="text-xs font-bold text-slate-800 truncate">{m.name}</span>
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => handleImportMediaToStudio(m)}
+                      title={`Add "${m.name}" to timeline`}
+                      className="group text-left cursor-pointer"
+                    >
+                      <div className="relative aspect-square rounded-xl overflow-hidden bg-slate-900 border border-slate-200 group-hover:border-indigo-400 transition">
+                        {m.thumb ? (
+                          <img src={m.thumb} alt="" className="w-full h-full object-cover" loading="lazy" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-2xl bg-gradient-to-br from-slate-800 to-slate-950">
+                            {typeEmoji}
+                          </div>
+                        )}
+                        <span className="absolute top-1 left-1 w-5 h-5 rounded-md bg-black/60 backdrop-blur-xs flex items-center justify-center text-[10px]">
+                          {typeEmoji}
+                        </span>
+                        {(m.type === 'video' || m.type === 'audio') && m.dur ? (
+                          <span className="absolute bottom-1 right-1 px-1 py-0.5 rounded bg-black/70 text-white text-[8px] font-mono font-bold">
+                            {fmtT(m.dur)}
+                          </span>
+                        ) : null}
+                        <div className="absolute inset-0 bg-indigo-600/0 group-hover:bg-indigo-600/20 transition flex items-center justify-center">
+                          <span className="opacity-0 group-hover:opacity-100 transition bg-white/95 text-indigo-700 text-[9px] font-black px-2 py-1 rounded-full shadow">
+                            ＋ Timeline
+                          </span>
                         </div>
-                        <p className="text-[10px] text-slate-400 mt-0.5 truncate">From: {m.from}</p>
                       </div>
-                      <button
-                        onClick={() => handleImportMediaToStudio(m)}
-                        className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-black rounded-lg shrink-0 transition"
-                      >
-                        ＋ Timeline
-                      </button>
-                    </div>
+                      <p className="text-[10px] font-bold text-slate-700 truncate mt-1">{m.name}</p>
+                      <p className="text-[9px] text-slate-400 truncate">{m.from}</p>
+                    </button>
                   );
                 })}
               </div>
@@ -7870,6 +7894,116 @@ export default function VideoStudio({
                         No audio/voice notes in the timeline currently. Tap "+ Timeline" on a voice note contribution or record using mic above!
                       </p>
                     )}
+                  </div>
+
+                  {/* Background Remover - real client-side portrait segmentation (Hugging Face
+                      transformers.js, same library already used for Whisper captions), lazy-
+                      loaded on first use. NOTE: could not be exercised end-to-end in the sandbox
+                      this was built in (huggingface.co is unreachable from that sandbox's
+                      browser) - the pipeline call follows the exact same, already-proven pattern
+                      as the caption transcriber, but please verify the actual model download and
+                      cutout quality on a real connection before relying on it. */}
+                  <div className="p-3.5 bg-slate-50 border border-slate-150 rounded-xl space-y-3">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">✂️ Background Remover</span>
+                      <span className="text-[8px] bg-amber-50 text-amber-700 border border-amber-100 px-1.5 py-0.2 rounded font-black">UNVERIFIED IN SANDBOX</span>
+                    </div>
+                    <p className="text-[10.5px] text-slate-500 font-medium">
+                      Cuts a person/subject out of a photo (on-device portrait segmentation) and places them onto a clean solid backdrop of your choice.
+                    </p>
+
+                    <input
+                      type="file"
+                      ref={bgRemoveInputRef}
+                      accept="image/*"
+                      data-testid="bg-remove-upload-input"
+                      className="hidden"
+                      onChange={e => {
+                        const f = e.target.files?.[0];
+                        if (f) setBgRemoveFile(f);
+                        e.target.value = '';
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => bgRemoveInputRef.current?.click()}
+                      className="w-full bg-white border border-slate-200 hover:border-indigo-400 rounded-lg p-2 text-[10.5px] font-bold text-slate-600 text-left truncate"
+                    >
+                      {bgRemoveFile ? `📄 ${bgRemoveFile.name}` : '📂 Choose a photo...'}
+                    </button>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 block">Backdrop Color</label>
+                      <div className="flex items-center gap-1.5">
+                        {['#FFFFFF', '#000000', '#4F46E5', '#059669', '#DC2626'].map(hex => (
+                          <button
+                            key={hex}
+                            type="button"
+                            onClick={() => setBgRemoveBackdrop(hex)}
+                            style={{ backgroundColor: hex }}
+                            className={`w-6 h-6 rounded-full border-2 cursor-pointer transition ${bgRemoveBackdrop === hex ? 'border-indigo-600 scale-110' : 'border-slate-200'}`}
+                            title={hex}
+                          />
+                        ))}
+                        <input
+                          type="color"
+                          value={bgRemoveBackdrop}
+                          onChange={e => setBgRemoveBackdrop(e.target.value)}
+                          className="w-6 h-6 rounded-full border border-slate-200 cursor-pointer p-0"
+                          title="Custom color"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={!bgRemoveFile || isRemovingBg}
+                      onClick={async () => {
+                        if (!bgRemoveFile) return;
+                        setIsRemovingBg(true);
+                        setBgRemoveStatus('Starting...');
+                        try {
+                          const { removeImageBackground } = await import('../services/backgroundRemovalService');
+                          const resultFile = await removeImageBackground(bgRemoveFile, bgRemoveBackdrop, (_pct, status) => {
+                            setBgRemoveStatus(status);
+                          });
+                          const url = URL.createObjectURL(resultFile);
+                          const item = {
+                            id: 'bgremoved_' + Date.now(),
+                            sourceMediaId: 'bgremoved_' + Date.now(),
+                            type: 'photo',
+                            file: resultFile,
+                            url,
+                            dur: 5,
+                            name: `Background Removed: ${bgRemoveFile.name}`,
+                            from: 'Me (Background Remover)',
+                            textBody: '',
+                            style: 'gradient',
+                            thumb: url,
+                            trimStart: 0,
+                            trimEnd: 5,
+                            transition: 'fade'
+                          };
+                          onUpdateClipsState([...clips, item]);
+                          onUpdateTimelineState([...timelineOrder, clips.length]);
+                          setBgRemoveFile(null);
+                          alert('✂️ Background removed! The result has been appended to the timeline.');
+                        } catch (err: any) {
+                          console.error('Background removal failed:', err);
+                          alert(`❌ Could not remove the background: ${err?.message || err}\n\nThis feature downloads a model from Hugging Face on first use - check your internet connection if this keeps failing.`);
+                        } finally {
+                          setIsRemovingBg(false);
+                          setBgRemoveStatus('');
+                        }
+                      }}
+                      className={`w-full font-extrabold py-2 rounded-lg text-center transition ${
+                        !bgRemoveFile || isRemovingBg
+                          ? 'bg-indigo-400 text-white cursor-not-allowed'
+                          : 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'
+                      }`}
+                    >
+                      {isRemovingBg ? `✂️ ${bgRemoveStatus || 'Processing...'}` : '✂️ Remove Background'}
+                    </button>
                   </div>
                 </div>
               </div>
