@@ -30,6 +30,14 @@ export interface RenderOptions {
   quality?: 'high' | 'balanced' | 'fast';
   /** Evens out volume differences between clips recorded on wildly different devices. Default: true. */
   autoLevel?: boolean;
+  /**
+   * Global output gain, as a percentage (100 = unchanged), applied as a final mixdown stage
+   * after per-clip volume/loudnorm and soundtrack mixing. Deliberately NOT folded into the
+   * per-clip volume filter: per-clip volume runs before loudnorm on clips longer than
+   * MIN_LOUDNORM_DURATION, and loudnorm would normalize most of a pre-gain right back out,
+   * making a "master volume" control that's applied per-clip largely inaudible in practice.
+   */
+  masterVolume?: number;
   /** Automatically lowers the soundtrack under speech, using each clip's Whisper caption timings. Default: true when captions exist. */
   autoDuck?: boolean;
   /** White-label branding applied to auto-generated text cards (intro/outro/section titles). */
@@ -1021,6 +1029,22 @@ export class RenderWorkerService {
           // why the preview can play music that then fails to make it into the exported file.
           console.warn('Soundtrack source was unreachable (likely a CORS restriction on the external host); delivering video without soundtrack.');
           warnings.push('Background music could not be added: the built-in track is hosted externally and blocked the download needed to mix it into your video (a cross-origin/CORS restriction). It played fine in the preview because preview playback doesn\'t need to read the raw file - only mixing into the export does. Workaround: upload your own MP3 as a custom soundtrack instead, which mixes in reliably.');
+        }
+      }
+
+      // Global output gain - see the RenderOptions.masterVolume doc comment for why this runs
+      // as its own final mixdown pass rather than folding into the per-clip volume filter.
+      if (options.masterVolume !== undefined && options.masterVolume !== 100) {
+        report(89, 'Applying master volume...');
+        try {
+          const gain = Math.max(0, options.masterVolume) / 100;
+          const volName = 'master_vol.mp4';
+          await ffmpeg.exec(['-i', finalName, '-c:v', 'copy', '-af', `volume=${gain.toFixed(2)}`, '-c:a', 'aac', volName]);
+          this.tempFiles.push(volName);
+          finalName = volName;
+        } catch (mvErr) {
+          console.warn('Master volume adjustment failed, delivering at original level:', mvErr);
+          warnings.push('Master volume could not be applied (an unexpected ffmpeg error) - your video was still rendered, just at its original volume level.');
         }
       }
 

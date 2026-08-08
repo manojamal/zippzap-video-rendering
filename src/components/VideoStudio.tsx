@@ -9,6 +9,35 @@ import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import { SnapPoint, resolveSnap, getSnapThresholdSeconds, buildWholeSecondSnapPoints, buildCaptionSnapPoints } from '../timelineSnap';
 import { clampRetimeRate, DEFAULT_RETIME_RATE, MIN_RETIME_RATE, MAX_RETIME_RATE } from '../retime';
 
+/**
+ * Resolution tier + aspect ratio -> real output pixel dimensions, shared by every render
+ * entry point. Previously each resolution tier was hardcoded to 16:9 dims regardless of
+ * the "Canvas Crop Aspect" the user picked in the Stitcher Video Modifiers panel - that
+ * control changed nothing about the actual rendered output. Width/height are rounded to
+ * even numbers, since libx264 rejects odd dimensions.
+ */
+const RESOLUTION_LONG_EDGE: Record<string, number> = { '720p': 1280, '1080p': 1920, '4K': 3840 };
+const RESOLUTION_SQUARE_EDGE: Record<string, number> = { '720p': 720, '1080p': 1080, '4K': 2160 };
+const toEven = (n: number) => Math.max(2, Math.round(n / 2) * 2);
+export function computeOutputDims(resolution: string, aspect: string): [number, number] {
+  const long = RESOLUTION_LONG_EDGE[resolution] || 1280;
+  const square = RESOLUTION_SQUARE_EDGE[resolution] || 720;
+  switch (aspect) {
+    case '9:16':
+      return [toEven((long * 9) / 16), long];
+    case '1:1':
+      return [square, square];
+    case '4:3':
+      return [long, toEven((long * 3) / 4)];
+    case '16:9':
+    default:
+      return [long, toEven((long * 9) / 16)];
+  }
+}
+
+const EXPORT_QUALITY_MAP: Record<string, 'high' | 'balanced' | 'fast'> = { high: 'high', balanced: 'balanced', fast: 'fast' };
+const EXPORT_FORMAT_MAP: Record<string, 'mp4' | 'webm' | 'avi' | 'gif'> = { MP4: 'mp4', WebM: 'webm', AVI: 'avi', GIF: 'gif' };
+
 interface ThemedTemplate {
   id: string;
   name: string;
@@ -1009,16 +1038,7 @@ export default function VideoStudio({
     setDownloadableMovieUrl(null);
     setExportWarnings([]);
 
-    const resolutionToDims: Record<string, [number, number]> = {
-      '720p': [1280, 720],
-      '1080p': [1920, 1080],
-      '4K': [3840, 2160],
-    };
-    const [w, h] = resolutionToDims[exportResolution] || [1280, 720];
-    const qualityMap: Record<string, 'high' | 'balanced' | 'fast'> = { high: 'high', balanced: 'balanced', fast: 'fast' };
-    const formatMap: Record<string, 'mp4' | 'webm' | 'avi' | 'gif'> = {
-      MP4: 'mp4', WebM: 'webm', AVI: 'avi', GIF: 'gif',
-    };
+    const [w, h] = computeOutputDims(exportResolution, cropAspect);
 
     if (!renderWorkerServiceRef.current) {
       renderWorkerServiceRef.current = new RenderWorkerService();
@@ -1039,13 +1059,14 @@ export default function VideoStudio({
         outputWidth: w,
         outputHeight: h,
         outputFps: exportFps,
-        outputFormat: formatMap[exportFormat] || 'mp4',
-        quality: qualityMap[exportQuality] || 'balanced',
+        outputFormat: EXPORT_FORMAT_MAP[exportFormat] || 'mp4',
+        quality: EXPORT_QUALITY_MAP[exportQuality] || 'balanced',
+        masterVolume: masterVideoVolume,
         brandColor: brand?.brandColor,
         brandLogoDataUrl: brand?.brandLogoDataUrl,
         // Real MP4 chapter markers from the bookmarks added via "🔖 Add Chapter" / the M
         // shortcut - only meaningfully supported when the output container is actually mp4.
-        markers: (formatMap[exportFormat] || 'mp4') === 'mp4' && markers.length > 0
+        markers: (EXPORT_FORMAT_MAP[exportFormat] || 'mp4') === 'mp4' && markers.length > 0
           ? markers.map(m => ({ time: m.time, label: m.label }))
           : undefined,
       },
@@ -3564,6 +3585,8 @@ export default function VideoStudio({
       renderWorkerServiceRef.current = new RenderWorkerService();
     }
 
+    const [mergedW, mergedH] = computeOutputDims(exportResolution, cropAspect);
+
     renderWorkerServiceRef.current.startRender(
       clips,
       {
@@ -3579,9 +3602,17 @@ export default function VideoStudio({
         audioPitch: audioPitch,
         audioReversed: audioReversed,
         autoTrimSilence: autoTrimSilenceEnabled,
+        outputWidth: mergedW,
+        outputHeight: mergedH,
+        outputFps: exportFps,
+        outputFormat: EXPORT_FORMAT_MAP[exportFormat] || 'mp4',
+        quality: EXPORT_QUALITY_MAP[exportQuality] || 'balanced',
+        masterVolume: masterVideoVolume,
         brandColor: brand?.brandColor,
         brandLogoDataUrl: brand?.brandLogoDataUrl,
-        markers: markers.length > 0 ? markers.map(m => ({ time: m.time, label: m.label })) : undefined,
+        markers: (EXPORT_FORMAT_MAP[exportFormat] || 'mp4') === 'mp4' && markers.length > 0
+          ? markers.map(m => ({ time: m.time, label: m.label }))
+          : undefined,
       },
       (prog, eta, status) => {
         setRenderProgress(prog);
@@ -4291,15 +4322,28 @@ export default function VideoStudio({
               {/* Resolution selection */}
               <div className="space-y-1">
                 <label className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Video Resolution</label>
-                <select
-                  value={exportResolution}
-                  onChange={e => setExportResolution(e.target.value as any)}
-                  className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white font-bold outline-none cursor-pointer"
-                >
-                  <option value="720p">HD Ready (1280 x 720) - Fast 📺</option>
-                  <option value="1080p">Full HD (1920 x 1080) - Recommended ✨</option>
-                  <option value="4K">Ultra HD (3840 x 2160) - Cine Max 👑</option>
-                </select>
+                <div className="grid grid-cols-3 gap-1">
+                  {([
+                    { id: '720p', label: '720p', emoji: '📺', hint: 'Fast' },
+                    { id: '1080p', label: '1080p', emoji: '✨', hint: 'Recommended' },
+                    { id: '4K', label: '4K', emoji: '👑', hint: 'Cine Max' },
+                  ] as const).map(res => (
+                    <button
+                      key={res.id}
+                      type="button"
+                      onClick={() => setExportResolution(res.id)}
+                      title={`${res.label} - ${res.hint}`}
+                      className={`py-1 text-[9px] font-bold rounded-lg transition border flex flex-col items-center justify-center gap-0.5 cursor-pointer ${
+                        exportResolution === res.id
+                          ? 'bg-indigo-600 border-indigo-500 text-white'
+                          : 'bg-slate-950 border-slate-800 hover:bg-slate-800 text-slate-400'
+                      }`}
+                    >
+                      <span>{res.emoji} {res.label}</span>
+                      <span className="text-[8px] opacity-80">{res.hint}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
 
               {/* Framerate Selection */}
@@ -6512,17 +6556,14 @@ export default function VideoStudio({
                 {/* Video modifiers panel */}
                 <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3.5">
                   <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">⚙️ Stitcher Video Modifiers</span>
-                  
+
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                    {/* Crop tool */}
+                    {/* Crop tool - real: drives the actual output pixel dimensions in both render pipelines */}
                     <div className="space-y-1">
                       <label className="text-[10.5px] font-black text-slate-700">📐 Canvas Crop Aspect</label>
                       <select
                         value={cropAspect}
-                        onChange={e => {
-                          setCropAspect(e.target.value as any);
-                          alert(`📐 Master Canvas aspect fit forced to: ${e.target.value}`);
-                        }}
+                        onChange={e => setCropAspect(e.target.value as any)}
                         className="w-full bg-white border border-slate-200 rounded-lg p-1.5 block font-bold text-slate-650"
                       >
                         <option value="16:9">16:9 Landscape (YouTube)</option>
@@ -6530,19 +6571,42 @@ export default function VideoStudio({
                         <option value="1:1">1:1 Square (Instagram Post)</option>
                         <option value="4:3">4:3 Retro Cinema SD</option>
                       </select>
+                      <p className="text-[9px] text-slate-400">Applied to your downloaded video's actual dimensions.</p>
                     </div>
 
-                    {/* Logo Remover coordinates blocker */}
+                    {/* Volume Multiplier - real: applied as a final mixdown gain stage in RenderWorker */}
                     <div className="space-y-1">
-                      <label className="text-[10.5px] font-black text-slate-700">🛡️ Logo/Watermark Mask</label>
+                      <label className="text-[10.5px] font-black text-slate-700">🔊 Master Compilation Volume</label>
+                      <input
+                        type="range"
+                        min="0"
+                        max="200"
+                        value={masterVideoVolume}
+                        onChange={e => setMasterVideoVolume(parseInt(e.target.value))}
+                        className="w-full accent-indigo-600 block mt-2 cursor-pointer"
+                      />
+                      <div className="flex justify-between font-mono text-[9px] text-slate-400 mt-1">
+                        <span>0% Muted</span>
+                        <span className="font-bold text-indigo-600">{masterVideoVolume}% Volume</span>
+                        <span>200% Output Boost</span>
+                      </div>
+                      <p className="text-[9px] text-slate-400">Applied to your downloaded video's final audio level.</p>
+                    </div>
+
+                    {/* Logo Remover, Stabilizer, Speed, Loop Reps: these controls are not yet wired into
+                        either render pipeline. They used to show a success alert implying they'd been
+                        applied to the final video, which wasn't true - fixed to say so honestly instead
+                        of silently pretending. Video stabilization specifically needs ffmpeg's libvidstab,
+                        which isn't compiled into the bundled ffmpeg.wasm core, so it can't be added without
+                        swapping the whole engine build - it's disabled here rather than faked. */}
+                    <div className="space-y-1 opacity-70">
+                      <label className="text-[10.5px] font-black text-slate-700 flex items-center gap-1">
+                        🛡️ Logo/Watermark Mask
+                        <span className="text-[8px] bg-amber-100 text-amber-700 px-1 py-0.5 rounded font-black normal-case">Preview only</span>
+                      </label>
                       <select
                         value={logoRemovalCorner}
-                        onChange={e => {
-                          setLogoRemovalCorner(e.target.value as any);
-                          if (e.target.value !== 'none') {
-                            alert(`🛡️ Filter applied: Overlay blocker cover configured at [CORNER: ${e.target.value.toUpperCase()}]. Logo successfully masked.`);
-                          }
-                        }}
+                        onChange={e => setLogoRemovalCorner(e.target.value as any)}
                         className="w-full bg-white border border-slate-200 rounded-lg p-1.5 block font-bold text-slate-650"
                       >
                         <option value="none">Disabled (No Filter)</option>
@@ -6551,57 +6615,28 @@ export default function VideoStudio({
                         <option value="bottom-left">Mask Bottom-Left Corner</option>
                         <option value="bottom-right">Mask Bottom-Right Corner</option>
                       </select>
+                      <p className="text-[9px] text-amber-600">Not yet applied to your downloaded video.</p>
                     </div>
 
-                    {/* Video Stabilizer */}
-                    <div className="space-y-1">
-                      <label className="text-[10.5px] font-black text-slate-700">📹 Digital Steadicam</label>
-                      <select
-                        value={videoStabilizeStrength}
-                        onChange={e => {
-                          setVideoStabilizeStrength(e.target.value as any);
-                          if (e.target.value !== 'none') {
-                            alert(`📹 Roll stabilizer set to: ${e.target.value.toUpperCase()} strength. Output frame shakes stabilized.`);
-                          }
-                        }}
-                        className="w-full bg-white border border-slate-200 rounded-lg p-1.5 block font-bold text-slate-650"
-                      >
+                    <div className="space-y-1 opacity-70">
+                      <label className="text-[10.5px] font-black text-slate-700 flex items-center gap-1">
+                        📹 Digital Steadicam
+                        <span className="text-[8px] bg-slate-200 text-slate-600 px-1 py-0.5 rounded font-black normal-case">Unavailable</span>
+                      </label>
+                      <select value="none" disabled className="w-full bg-slate-100 border border-slate-200 rounded-lg p-1.5 block font-bold text-slate-400 cursor-not-allowed">
                         <option value="none">Disabled (Native Raw)</option>
-                        <option value="low">Subtle (Gimbal Buffering)</option>
-                        <option value="med">Medium Electronic Roll Crop</option>
-                        <option value="high">Intense Horizon-Lock Smooth</option>
                       </select>
+                      <p className="text-[9px] text-slate-400">Real stabilization needs an ffmpeg build this app doesn't ship (libvidstab).</p>
                     </div>
 
-                    {/* Volume Multiplier */}
-                    <div className="space-y-1">
-                      <label className="text-[10.5px] font-black text-slate-700">🔊 Master Compilation Volume</label>
-                      <input
-                        type="range"
-                        min="0"
-                        max="200"
-                        value={masterVideoVolume}
-                        onChange={e => {
-                          setMasterVideoVolume(parseInt(e.target.value));
-                        }}
-                        className="w-full accent-indigo-600 block mt-2 cursor-pointer"
-                      />
-                      <div className="flex justify-between font-mono text-[9px] text-slate-400 mt-1">
-                        <span>0% Muted</span>
-                        <span className="font-bold text-indigo-600">{masterVideoVolume}% Volume</span>
-                        <span>200% Output Boost</span>
-                      </div>
-                    </div>
-
-                    {/* Speed rate modifier */}
-                    <div className="space-y-1">
-                      <label className="text-[10.5px] font-black text-slate-700">🏃 Video Motion Pace</label>
+                    <div className="space-y-1 opacity-70">
+                      <label className="text-[10.5px] font-black text-slate-700 flex items-center gap-1">
+                        🏃 Video Motion Pace
+                        <span className="text-[8px] bg-amber-100 text-amber-700 px-1 py-0.5 rounded font-black normal-case">Preview only</span>
+                      </label>
                       <select
                         value={audioSpeed}
-                        onChange={e => {
-                          setAudioSpeed(parseFloat(e.target.value));
-                          alert(`🏃 Video playback play speed rate updated to ${e.target.value}x!`);
-                        }}
+                        onChange={e => setAudioSpeed(parseFloat(e.target.value))}
                         className="w-full bg-white border border-slate-200 rounded-lg p-1.5 block font-bold text-slate-650"
                       >
                         <option value="0.25">0.25x Slow-mo frame buffer</option>
@@ -6611,17 +6646,17 @@ export default function VideoStudio({
                         <option value="2.0">2.0x Double speed accelerate</option>
                         <option value="3.0">3.0x Hyper-lapse pacing</option>
                       </select>
+                      <p className="text-[9px] text-amber-600">Not yet applied to your downloaded video - use each clip's own Speed control on the timeline instead, which is real.</p>
                     </div>
 
-                    {/* Short Gif repetitive Looping */}
-                    <div className="space-y-1">
-                      <label className="text-[10.5px] font-black text-slate-700">🔁 Short Clip Loop Reps</label>
+                    <div className="space-y-1 opacity-70">
+                      <label className="text-[10.5px] font-black text-slate-700 flex items-center gap-1">
+                        🔁 Short Clip Loop Reps
+                        <span className="text-[8px] bg-amber-100 text-amber-700 px-1 py-0.5 rounded font-black normal-case">Preview only</span>
+                      </label>
                       <select
                         value={loopRepetitions}
-                        onChange={e => {
-                          setLoopRepetitions(parseInt(e.target.value));
-                          alert(`🔁 Timelines short cards set to repeat looping: ${e.target.value} times.`);
-                        }}
+                        onChange={e => setLoopRepetitions(parseInt(e.target.value))}
                         className="w-full bg-white border border-slate-200 rounded-lg p-1.5 block font-bold text-slate-650"
                       >
                         <option value="1">Play 1x (No repeats)</option>
@@ -6630,18 +6665,12 @@ export default function VideoStudio({
                         <option value="5">Play 5x Looped loop</option>
                         <option value="10">Play 10x Constant Loop</option>
                       </select>
+                      <p className="text-[9px] text-amber-600">Not yet applied to your downloaded video.</p>
                     </div>
                   </div>
 
                   <div className="flex items-center justify-between border-t border-slate-150 pt-2 text-[10.5px] text-slate-500 font-medium">
                     <span>🔄 Multi-Video Merge Joiner is fully enabled. Timeline order defines rendering sequence.</span>
-                    <button
-                      type="button"
-                      onClick={() => alert(`🚀 Compilation parameters updated! Master audio track speed scale: ${audioSpeed}x. Stabilizer strength: ${videoStabilizeStrength}. Canvas Crop: ${cropAspect}. Mask state: ${logoRemovalCorner === 'none' ? 'Inert' : logoRemovalCorner.toUpperCase()}`)}
-                      className="px-3 py-1 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-lg font-extrabold hover:bg-indigo-100/75 transition"
-                    >
-                      Save Parameters
-                    </button>
                   </div>
                 </div>
               </div>
