@@ -1509,6 +1509,19 @@ export default function VideoStudio({
   const [isDropzoneActive, setIsDropzoneActive] = useState(false);
   const dropzoneDragDepth = useRef(0);
 
+  // Purely a navigation aid: highlights which half of the studio the user said they want
+  // (AI-assisted vs hands-on manual editing) and smooth-scrolls to that section. Doesn't
+  // hide or gate any panel behind it - every tool stays reachable either way, so switching
+  // never makes a feature the user was mid-way through using disappear.
+  const [studioMode, setStudioMode] = useState<'ai' | 'manual'>('ai');
+  const aiCompileSectionRef = useRef<HTMLDivElement>(null);
+  const manualEditSectionRef = useRef<HTMLDivElement>(null);
+  const handleStudioModeSelect = (mode: 'ai' | 'manual') => {
+    setStudioMode(mode);
+    const target = mode === 'ai' ? aiCompileSectionRef.current : manualEditSectionRef.current;
+    target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   const handleDropzoneDragEnter = (e: React.DragEvent) => {
     e.preventDefault();
     dropzoneDragDepth.current += 1;
@@ -3967,6 +3980,15 @@ export default function VideoStudio({
     }, 1200);
   };
 
+  // Cosmetic countdown only - this panel is explicitly labeled "Test Simulate ..." and
+  // must only run when the user clicks that button. It used to auto-call
+  // handleSimulateMidnightLaunch() itself once the mock clock hit 12:00:00 AM, ~12 seconds
+  // after every page load - popping an unrequested native alert() (or, worse, silently
+  // kicking off the fake "rendering & posting to social media" animation) in the middle of
+  // whatever the user was actually doing, via a stale closure over `clips` captured at
+  // mount time. Real bug, not just confusing UX: it could fire the "add at least one clip"
+  // alert even after the user had already added clips, because the interval's closure never
+  // saw the update.
   useEffect(() => {
     let tickCount = 48;
     const interval = setInterval(() => {
@@ -3978,10 +4000,8 @@ export default function VideoStudio({
       if (tickCount < 60) {
         setVirtualClock(`11:59:${tickCount.toString().padStart(2, '0')} PM`);
       } else {
-        setVirtualClock('12:00:00 AM');
-        clearInterval(interval);
-        // Automatically trigger midnight render and cross-post!
-        handleSimulateMidnightLaunch();
+        setVirtualClock('11:59:48 PM');
+        tickCount = 48;
       }
     }, 1000);
     return () => clearInterval(interval);
@@ -4683,6 +4703,106 @@ export default function VideoStudio({
 
   return (
     <div className="space-y-6">
+      {/* Floating Render & Deliver status - fixed so it's visible no matter where on the
+          page the user is scrolled to. Fixes a real bug: handleExportMovie (triggered by
+          Quick Stitch, or any future trigger outside the fullscreen preview) used to only
+          render its progress bar / download-ready card inside the isFullscreen branch, so
+          a Quick Stitch render from the normal view finished with zero visible result - no
+          percentage, no download link, nothing. This mounts the same live state
+          (isExporting / exportProgress / downloadableMovieUrl / batch export) as a
+          persistent floating card instead, so a render started from anywhere always ends
+          somewhere the user can see and download it from. */}
+      {(isExporting || downloadableMovieUrl || isBatchExporting || batchResults.length > 0) && (
+        <div className="fixed bottom-4 right-4 z-50 w-[calc(100%-2rem)] max-w-sm space-y-2.5 bg-slate-900 border border-slate-800 rounded-2xl p-3.5 shadow-2xl" data-testid="floating-render-status">
+          {isExporting && (
+            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800/80 space-y-2">
+              <div className="flex justify-between items-center text-[10px] font-bold">
+                <span className="text-indigo-400 animate-pulse uppercase">Compiling {exportFormat}...</span>
+                <span className="bg-indigo-950 text-indigo-300 px-2 py-0.5 rounded-full font-mono" data-testid="floating-render-progress">{exportProgress}%</span>
+              </div>
+              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden shadow-inner">
+                <div className="bg-indigo-500 h-full transition-all duration-150" style={{ width: `${exportProgress}%` }} />
+              </div>
+              <p className="text-[9px] text-slate-300 leading-normal pl-1.5 border-l border-indigo-500 select-all font-mono truncate">
+                {exportStatus}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  renderWorkerServiceRef.current?.cancel(() => {
+                    setIsExporting(false);
+                    setExportProgress(0);
+                    setExportStatus('Export cancelled.');
+                  });
+                }}
+                className="w-full h-8 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white font-bold text-[10px] transition cursor-pointer"
+              >
+                ✕ Cancel Export
+              </button>
+            </div>
+          )}
+
+          {downloadableMovieUrl && (
+            <div className="bg-emerald-950/40 border border-emerald-900/30 rounded-xl p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="w-5 h-5 bg-emerald-600 text-white rounded-full flex items-center justify-center text-[10px] font-black">✓</span>
+                <span className="text-[10px] text-emerald-400 font-extrabold">Ready for download!</span>
+              </div>
+              {exportWarnings.length > 0 && (
+                <div className="bg-amber-950/40 border border-amber-800/40 rounded-lg p-2 space-y-1">
+                  {exportWarnings.map((w, wi) => (
+                    <p key={wi} className="text-[9px] text-amber-300 leading-normal flex gap-1">
+                      <span className="shrink-0">⚠️</span>
+                      <span>{w}</span>
+                    </p>
+                  ))}
+                </div>
+              )}
+              <a
+                href={downloadableMovieUrl}
+                download={`stitched_movie_${exportResolution}_${exportFps}fps_${exportQuality}.${exportFormat.toLowerCase()}`}
+                data-testid="floating-download-link"
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold py-2 rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-lg shadow-emerald-900/20 active:scale-95 transition-all text-center"
+              >
+                ⬇️ Download {exportFormat} Movie file
+              </a>
+              <button
+                type="button"
+                onClick={() => {
+                  if (downloadableMovieUrl) URL.revokeObjectURL(downloadableMovieUrl);
+                  setDownloadableMovieUrl(null);
+                  setExportWarnings([]);
+                  setIsExporting(false);
+                }}
+                className="w-full text-[9px] text-slate-400 hover:text-slate-300 font-bold py-1 cursor-pointer transition"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {isBatchExporting && (
+            <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 text-[10px] text-slate-300">
+              ⏳ {batchStatus}
+            </div>
+          )}
+          {batchResults.length > 0 && (
+            <div className="space-y-1.5">
+              {batchResults.map((r) => (
+                <a
+                  key={r.filename}
+                  href={r.url}
+                  download={r.filename}
+                  className="w-full bg-emerald-950/40 border border-emerald-900/30 hover:bg-emerald-900/40 text-emerald-400 font-bold py-1.5 rounded-lg text-[10px] flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                >
+                  ⬇️ {r.label}
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Title block / upload dropzone */}
       <div
         onDragEnter={handleDropzoneDragEnter}
@@ -4731,6 +4851,132 @@ export default function VideoStudio({
             className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl shadow transition cursor-pointer"
           >
             Stitch & Render Video ➔
+          </button>
+        </div>
+      </div>
+
+      {/* AI Compile / Manual Edit mode selector - scrolls to the matching section below.
+          Both halves of the studio are always present on the page; this is a wayfinding
+          control, not a visibility gate, so it can't hide a tool the user is relying on. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <button
+          type="button"
+          onClick={() => handleStudioModeSelect('ai')}
+          className={`text-left p-4 rounded-2xl border-2 transition cursor-pointer flex items-center gap-3 ${
+            studioMode === 'ai'
+              ? 'bg-gradient-to-br from-indigo-600 to-purple-700 border-indigo-500 text-white shadow-lg'
+              : 'bg-white border-slate-200 text-slate-500 hover:border-indigo-300'
+          }`}
+        >
+          <span className="text-2xl">✨</span>
+          <span>
+            <span className="block text-xs font-black uppercase tracking-wide">AI Compile</span>
+            <span className={`block text-[10.5px] ${studioMode === 'ai' ? 'text-indigo-100' : 'text-slate-400'}`}>Let AI create magic</span>
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => handleStudioModeSelect('manual')}
+          className={`text-left p-4 rounded-2xl border-2 transition cursor-pointer flex items-center gap-3 ${
+            studioMode === 'manual'
+              ? 'bg-gradient-to-br from-slate-800 to-slate-950 border-slate-700 text-white shadow-lg'
+              : 'bg-white border-slate-200 text-slate-500 hover:border-slate-400'
+          }`}
+        >
+          <span className="text-2xl">🎛️</span>
+          <span>
+            <span className="block text-xs font-black uppercase tracking-wide">Manual Edit</span>
+            <span className={`block text-[10.5px] ${studioMode === 'manual' ? 'text-slate-300' : 'text-slate-400'}`}>Full creative control</span>
+          </span>
+        </button>
+      </div>
+
+      {/* My Media quick-access strip - always visible near the top of the page instead of
+          being buried after the timeline, mirroring the reference layout's persistent media
+          sidebar. Reuses the exact same importableMedia data and handleImportMediaToStudio
+          handler as the full grid further down (see "My Media" below) - this is a second,
+          compact view onto the same real data, not a separate/fake feature. */}
+      {importableMedia.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-3xl p-4 shadow-sm">
+          <div className="flex justify-between items-center pb-2.5 mb-2.5 border-b border-slate-50">
+            <h3 className="text-[10px] font-bold text-[#1C1207] uppercase tracking-widest">🖼️ My Media <span className="text-slate-400 font-medium normal-case">· quick import</span></h3>
+            <span className="text-[10px] text-indigo-600 px-2 py-0.5 bg-indigo-50 rounded-full font-black">{importableMedia.length} Available</span>
+          </div>
+          <div className="flex gap-2.5 overflow-x-auto pb-1">
+            {importableMedia.slice(0, 16).map(m => {
+              const typeEmoji = m.type === 'video' ? '📹' : m.type === 'photo' ? '📸' : m.type === 'audio' ? '🎙️' : '✍️';
+              return (
+                <button
+                  key={`quickstrip-${m.id}`}
+                  type="button"
+                  onClick={() => handleImportMediaToStudio(m)}
+                  title={`Add "${m.name}" to timeline`}
+                  className="group text-left cursor-pointer shrink-0 w-16"
+                >
+                  <div className="relative aspect-square w-16 rounded-lg overflow-hidden bg-slate-900 border border-slate-200 group-hover:border-indigo-400 transition">
+                    {m.thumb ? (
+                      <img src={m.thumb} alt="" className="w-full h-full object-cover" loading="lazy" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-lg bg-gradient-to-br from-slate-800 to-slate-950">{typeEmoji}</div>
+                    )}
+                    <span className="absolute top-0.5 left-0.5 w-4 h-4 rounded bg-black/60 backdrop-blur-xs flex items-center justify-center text-[8px]">{typeEmoji}</span>
+                  </div>
+                  <p className="text-[8.5px] font-bold text-slate-600 truncate mt-1">{m.name}</p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Smart Shortcuts - one-click real actions, not decoration. Auto-Trim Silence toggles
+          the same autoTrimSilenceEnabled flag the render pipeline already reads; Highlight
+          Finder runs the real RMS audio-energy analysis (handleFindHighlights) already wired
+          to the timeline toolbar, surfaced here too since it's easy to miss further down. */}
+      <div className="bg-white border border-slate-200 rounded-3xl p-4 shadow-sm">
+        <h3 className="text-[10px] font-bold text-[#1C1207] uppercase tracking-widest pb-2.5 mb-2.5 border-b border-slate-50">⚡ Smart Shortcuts</h3>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+          <button
+            type="button"
+            onClick={handleQuickStitch}
+            disabled={isExporting}
+            className="flex flex-col items-center justify-center gap-1 p-3 rounded-xl bg-emerald-50 border border-emerald-100 hover:border-emerald-400 disabled:opacity-50 transition cursor-pointer text-center"
+          >
+            <span className="text-lg">🚀</span>
+            <span className="text-[10px] font-black text-emerald-700">Quick Stitch</span>
+            <span className="text-[8.5px] text-emerald-600/80">Arrange &amp; render now</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setAutoTrimSilenceEnabled(v => !v)}
+            className={`flex flex-col items-center justify-center gap-1 p-3 rounded-xl border transition cursor-pointer text-center ${
+              autoTrimSilenceEnabled ? 'bg-indigo-50 border-indigo-300' : 'bg-slate-50 border-slate-150 hover:border-indigo-300'
+            }`}
+          >
+            <span className="text-lg">✂️</span>
+            <span className="text-[10px] font-black text-slate-800">Auto Trim</span>
+            <span className={`text-[8.5px] ${autoTrimSilenceEnabled ? 'text-indigo-600 font-bold' : 'text-slate-400'}`}>
+              {autoTrimSilenceEnabled ? 'Enabled ✓' : 'Removes silences'}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={handleFindHighlights}
+            disabled={isFindingHighlights || clips.length === 0}
+            className="flex flex-col items-center justify-center gap-1 p-3 rounded-xl bg-amber-50 border border-amber-100 hover:border-amber-400 disabled:opacity-50 transition cursor-pointer text-center"
+          >
+            <span className="text-lg">🎯</span>
+            <span className="text-[10px] font-black text-amber-700">Highlight Reel</span>
+            <span className="text-[8.5px] text-amber-600/80">{isFindingHighlights ? (highlightFinderStatus || 'Analyzing…') : 'Trim to best moment'}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleStudioModeSelect('ai')}
+            className="flex flex-col items-center justify-center gap-1 p-3 rounded-xl bg-purple-50 border border-purple-100 hover:border-purple-400 transition cursor-pointer text-center"
+          >
+            <span className="text-lg">✨</span>
+            <span className="text-[10px] font-black text-purple-700">AI Auto-Compile</span>
+            <span className="text-[8.5px] text-purple-600/80">Assemble from wishes</span>
           </button>
         </div>
       </div>
@@ -4793,7 +5039,7 @@ export default function VideoStudio({
           </div>
 
           {/* 🤖 AI & MANUAL HYBRID AUTO-COMPILER */}
-          <div className="bg-gradient-to-br from-indigo-900 to-slate-900 border border-indigo-500/30 rounded-3xl p-5 text-white shadow-xl space-y-4">
+          <div ref={aiCompileSectionRef} className="bg-gradient-to-br from-indigo-900 to-slate-900 border border-indigo-500/30 rounded-3xl p-5 text-white shadow-xl space-y-4 scroll-mt-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-indigo-505/30 pb-3">
               <div>
                 <span className="text-[10px] font-black text-indigo-300 uppercase tracking-widest block">Neural Video Synthesizer</span>
@@ -6486,7 +6732,7 @@ export default function VideoStudio({
           </div>
 
           {/* 🎛️ ADVANCED MULTI-MEDIA STUDIO HUB */}
-          <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-6">
+          <div ref={manualEditSectionRef} className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-6 scroll-mt-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-100 pb-3 gap-2">
               <div>
                 <h3 className="text-sm font-extrabold text-[#1C1207] tracking-tight flex items-center gap-1.5">

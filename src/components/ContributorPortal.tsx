@@ -97,7 +97,11 @@ export default function ContributorPortal({
       }
     });
 
-  const [stage, setStage] = useState<'login' | 'upload' | 'success'>('login');
+  // 'welcome' plays the invite's welcome video before anything else - including before the
+  // login/demo-account screen, so every path into the portal (real login, quick-join guest,
+  // or a demo account) sees it first, not just some of them.
+  const [stage, setStage] = useState<'welcome' | 'login' | 'upload' | 'success'>('welcome');
+  const [welcomeVideoEnded, setWelcomeVideoEnded] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [lockAlertMessage, setLockAlertMessage] = useState<string | null>(null);
@@ -601,31 +605,34 @@ export default function ContributorPortal({
           <p className="text-xs text-indigo-400 font-bold">Secret surprise occasion contribution & organizer studio deck</p>
         </div>
 
-        {/* Toggle between Contributor form and Organizer Submission Hub */}
-        <div className="flex bg-slate-900 p-1.5 rounded-2xl border border-slate-800 gap-1">
-          <button
-            type="button"
-            onClick={() => setOrganizerMode(false)}
-            className={`flex-1 py-2.5 text-[11px] font-black uppercase rounded-xl transition cursor-pointer text-center ${
-              !organizerMode 
-                ? 'bg-indigo-600 text-white shadow-md' 
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            ✍️ Contributor Form
-          </button>
-          <button
-            type="button"
-            onClick={() => setOrganizerMode(true)}
-            className={`flex-1 py-2.5 text-[11px] font-black uppercase rounded-xl transition cursor-pointer text-center ${
-              organizerMode 
-                ? 'bg-indigo-600 text-white shadow-md' 
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            👨‍✈️ Organizer Hub ({campaignWishes.length})
-          </button>
-        </div>
+        {/* Toggle between Contributor form and Organizer Submission Hub - hidden during the
+            welcome video so it can't be used to skip straight past it. */}
+        {stage !== 'welcome' && (
+          <div className="flex bg-slate-900 p-1.5 rounded-2xl border border-slate-800 gap-1">
+            <button
+              type="button"
+              onClick={() => setOrganizerMode(false)}
+              className={`flex-1 py-2.5 text-[11px] font-black uppercase rounded-xl transition cursor-pointer text-center ${
+                !organizerMode
+                  ? 'bg-indigo-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              ✍️ Contributor Form
+            </button>
+            <button
+              type="button"
+              onClick={() => setOrganizerMode(true)}
+              className={`flex-1 py-2.5 text-[11px] font-black uppercase rounded-xl transition cursor-pointer text-center ${
+                organizerMode
+                  ? 'bg-indigo-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              👨‍✈️ Organizer Hub ({campaignWishes.length})
+            </button>
+          </div>
+        )}
 
         {/* ORGANIZER MODE: SORTING / FILTERING SUBMITTED WISHES */}
         {organizerMode ? (
@@ -770,6 +777,42 @@ export default function ContributorPortal({
         ) : (
           /* STANDARD CONTRIBUTOR FLOW STAGES */
           <>
+            {/* STAGE 0: WELCOME VIDEO - plays before login/demo-account entry, for every
+                contributor who opens the invite link. */}
+            {stage === 'welcome' && (
+              <div className="space-y-4 animate-in zoom-in-95 duration-150">
+                <div className="text-center space-y-1.5">
+                  <div className="text-4xl">🎉</div>
+                  <h3 className="text-sm font-extrabold text-white">
+                    You're invited to surprise {celebrantName}!
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Watch this quick welcome message, then add your video, voice, photo, or written wish.
+                  </p>
+                </div>
+
+                <div className="aspect-video rounded-2xl overflow-hidden bg-slate-900 border border-slate-800 relative">
+                  <video
+                    src="/media/welcome-message.mp4"
+                    controls
+                    playsInline
+                    data-testid="cp-welcome-video"
+                    className="w-full h-full object-contain bg-black"
+                    onEnded={() => setWelcomeVideoEnded(true)}
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setStage('login')}
+                  data-testid="cp-welcome-continue"
+                  className="w-full h-12 bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs uppercase tracking-wider rounded-xl transition cursor-pointer shadow-lg active:scale-95 flex items-center justify-center gap-2"
+                >
+                  {welcomeVideoEnded ? '✓ Continue to Login' : 'Continue to Login →'}
+                </button>
+              </div>
+            )}
+
             {/* STAGE 1: SIGN IN / QUICK REG */}
             {stage === 'login' && (
               <div className="space-y-4 animate-in zoom-in-95 duration-150">
