@@ -413,12 +413,45 @@ export class RenderWorkerService {
     const startedAt = Date.now();
     const warnings: string[] = [];
 
+    // Monotonic clamp: pct can only ever go up. Without this, the live per-clip
+    // interpolation below (driven by ffmpeg's own progress events, which reset to 0 at the
+    // start of every single ffmpeg.exec() call - and a single clip can involve 2+ execs, e.g.
+    // a silence-detection pass followed by the real transcode) would make the bar visibly
+    // jump backwards.
+    let maxReportedPct = 0;
     const report = (pct: number, statusText: string) => {
+      const clamped = Math.max(pct, maxReportedPct);
+      maxReportedPct = clamped;
       const elapsed = (Date.now() - startedAt) / 1000;
-      const rate = pct > 0 ? elapsed / pct : 0;
-      const etaSeconds = Math.max(0, Math.round(rate * (100 - pct)));
-      onProgress(Math.min(99, Math.round(pct)), etaSeconds, statusText);
+      const rate = clamped > 0 ? elapsed / clamped : 0;
+      const etaSeconds = Math.max(0, Math.round(rate * (100 - clamped)));
+      onProgress(Math.min(99, Math.round(clamped)), etaSeconds, statusText);
     };
+
+    // The per-clip checkpoints below only report once *before* that clip's ffmpeg command(s)
+    // start - for a real (non-trivial) clip, the actual transcode can take a long time, during
+    // which the reported percentage previously sat completely frozen. That's indistinguishable
+    // from a hang to anyone watching it, which is exactly what was reported. This listens to
+    // ffmpeg.wasm's own real-time encode progress and interpolates smoothly within whichever
+    // clip is currently processing, so the number visibly keeps moving instead of stalling.
+    // Only active during the per-clip loop (liveClipWeight is 0 the rest of the time), and
+    // removed at every exit path below so it can't leak into - or keep firing after - a
+    // later render that reuses the same singleton ffmpeg instance.
+    let liveClipBase = 0;
+    let liveClipWeight = 0;
+    let liveStatusText = '';
+    const onFfmpegLiveProgress = ({ progress }: { progress: number }) => {
+      if (this.cancelled || liveClipWeight === 0) return;
+      // ffmpeg.wasm's progress value is unreliable for some command shapes (concat demuxer,
+      // complex filtergraphs) - it can report negative or >1 values outside the per-clip
+      // transcode this is meant to track. Clamping to [0,1] combined with report()'s own
+      // monotonic clamp means a bad reading can only ever be a no-op, never a visible glitch.
+      const clamped01 = Math.min(1, Math.max(0, progress));
+      report(liveClipBase + clamped01 * liveClipWeight, liveStatusText);
+    };
+    // Declared outside the try block so the catch block below can still reach it to detach
+    // the listener - the `ffmpeg` const from getFFmpeg() only exists inside the try's scope.
+    let ffmpegRef: FFmpeg | null = null;
 
     try {
       if (!clips || clips.length === 0) {
@@ -439,10 +472,12 @@ export class RenderWorkerService {
         if (!this.cancelled) report(1, stage);
       });
       if (this.cancelled) return;
+      ffmpegRef = ffmpeg;
       // Bound every individual ffmpeg command so a hung/OOM'd WASM worker fails loudly
       // instead of freezing the export forever with no error and no download.
       withExecTimeout(ffmpeg);
       await ensureFonts(ffmpeg);
+      ffmpeg.on('progress', onFfmpegLiveProgress);
 
       // Weighting: 65% for per-clip transcoding, 15% for transitions, 15% for concat, 5% for audio mix/finishing.
       const perClipWeight = clips.length > 0 ? 65 / clips.length : 0;
@@ -459,10 +494,10 @@ export class RenderWorkerService {
         // trimStart/trimEnd on this copy only, never mutating the caller's actual clips array.
         const outName = `clip_${i}.mp4`;
 
-        report(
-          1 + i * perClipWeight,
-          `Processing clip ${i + 1} of ${clips.length} (${clip.name || 'untitled'})...`
-        );
+        liveClipBase = 1 + i * perClipWeight;
+        liveClipWeight = perClipWeight;
+        liveStatusText = `Processing clip ${i + 1} of ${clips.length} (${clip.name || 'untitled'})...`;
+        report(liveClipBase, liveStatusText);
 
         const bytes = await getClipBytes(clip);
         if (!bytes) {
@@ -892,6 +927,11 @@ export class RenderWorkerService {
         throw new Error('None of the clips could be processed (all sources were unreadable).');
       }
 
+      // Done with the per-clip loop - stop interpolating against it so later stages'
+      // (transitions/concat/mixing) own fixed checkpoints below aren't second-guessed by a
+      // stray leftover ffmpeg progress event from whichever exec() ran last.
+      liveClipWeight = 0;
+
       // --- Real crossfade/slide transitions -------------------------------
       // Group consecutive clips into "chains" split wherever the transition is 'none'.
       // Each chain of 2+ clips is blended into one file via ffmpeg's xfade/acrossfade
@@ -1138,10 +1178,15 @@ export class RenderWorkerService {
       const blob = new Blob([uint8], { type: mimeType });
       const outputUrl = URL.createObjectURL(blob);
 
+      ffmpeg.off('progress', onFfmpegLiveProgress);
       await this.cleanupTempFiles(ffmpeg);
       onProgress(100, 0, 'Render complete!');
       onComplete(outputUrl, warnings);
     } catch (err: any) {
+      // ffmpeg is the module-level singleton (reused by the next render too), so this
+      // listener must always be detached on the way out - including on failure/cancel -
+      // or it keeps firing (into this call's now-stale `report`) on every future render.
+      ffmpegRef?.off('progress', onFfmpegLiveProgress);
       if (this.cancelled) {
         // Expected: the user cancelled, or the component unmounted mid-render. Not an error.
         onProgress(0, 0, 'Render cancelled.');
