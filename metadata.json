@@ -1,0 +1,11 @@
+{
+  "name": "Zipp Zap",
+  "description": "Interactive video studio, slideshow builder, and collaborative portal for team surprises and rewards.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
