@@ -316,6 +316,24 @@ async function detectAndTrimSilence(
   return { trimStart: Number(newStart.toFixed(2)), trimEnd: Number(newEnd.toFixed(2)) };
 }
 
+// "Background Theme" (clip.backgroundReplace) was drawn live in the studio's canvas preview
+// (drawStudioFrame's drawBackgroundReplace, an animated gradient + decorations behind text
+// cards and any letterboxed video/photo gaps) but was never passed into the actual ffmpeg
+// render at all - the exported video always fell back to the plain default card color,
+// regardless of which theme was selected and clearly visible in the preview. Fixed here with
+// a real (if simpler than the animated canvas version) representative solid color per theme,
+// so the choice actually reaches the file you download. Colors match each theme's dominant
+// gradient stop in drawBackgroundReplace.
+const BACKGROUND_THEME_COLORS: Record<string, string> = {
+  birthday: '0x0f172a',
+  wedding: '0x7f1d1d',
+  corporate: '0x0f172a',
+  award: '0x02010a',
+  church: '0x1e1b4b',
+  festival: '0x050515',
+  luxury: '0x7f1d1d',
+};
+
 function guessExtension(clip: any): string {
   const nameExt = (clip.name || '').split('.').pop();
   if (nameExt && nameExt.length <= 4 && /^[a-zA-Z0-9]+$/.test(nameExt)) return nameExt.toLowerCase();
@@ -554,7 +572,14 @@ export class RenderWorkerService {
             `[fg_src]scale=${OUT_W}:${OUT_H}:force_original_aspect_ratio=decrease[fg_fit];` +
             `[bg_blur][fg_fit]overlay=(W-w)/2:(H-h)/2`;
         } else {
-          canvasFit = `scale=${OUT_W}:${OUT_H}:force_original_aspect_ratio=decrease,pad=${OUT_W}:${OUT_H}:(ow-iw)/2:(oh-ih)/2:color=black`;
+          // Letterbox padding is the one place a video clip's Background Theme (drawn behind it
+          // in the live preview, previously never reaching the actual render) is actually
+          // visible - a full-bleed clip covers the whole frame either way, so theme the pad
+          // color instead of leaving it hardcoded black when a theme is set.
+          const padColor = (clip.backgroundReplace && clip.backgroundReplace !== 'none'
+            ? BACKGROUND_THEME_COLORS[clip.backgroundReplace]
+            : null) || 'black';
+          canvasFit = `scale=${OUT_W}:${OUT_H}:force_original_aspect_ratio=decrease,pad=${OUT_W}:${OUT_H}:(ow-iw)/2:(oh-ih)/2:color=${padColor}`;
         }
         const vf = [canvasFit, 'setsar=1', `fps=${OUT_FPS}`];
         const namedFilter = videoFilterToFfmpeg(activeFilter);
@@ -699,7 +724,10 @@ export class RenderWorkerService {
             // White-label branding: a custom background tint and/or a logo overlay in the
             // top-right corner, when the organizer has set them in their profile.
             const cardText = escapeDrawtext(clip.textBody || clip.name || '');
-            const bgColor = options.brandColor ? `0x${options.brandColor.replace('#', '')}` : '0x1c1917';
+            const themeColor = clip.backgroundReplace && clip.backgroundReplace !== 'none'
+              ? BACKGROUND_THEME_COLORS[clip.backgroundReplace]
+              : undefined;
+            const bgColor = themeColor || (options.brandColor ? `0x${options.brandColor.replace('#', '')}` : '0x1c1917');
             const drawtextStage =
               `drawtext=fontfile=font-bold.ttf:text='${cardText}':fontsize=40:fontcolor=white:` +
               'x=(w-text_w)/2:y=(h-text_h)/2:box=1:boxcolor=black@0.35:boxborderw=20';

@@ -6633,28 +6633,48 @@ export default function VideoStudio({
                                   </div>
                                 </div>
 
-                                {/* AI One-Click Smart Settings (Background replacement, Speaker Face center, stabilize dampers) */}
+                                {/* AI One-Click Smart Settings (Background theme, Speaker Face center, stabilize dampers) */}
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pl-4 pt-2 border-t border-slate-150 text-[10px] space-y-1 sm:space-y-0" onClick={e => e.stopPropagation()}>
-                                  <div className="flex flex-col gap-1">
-                                    <span className="font-extrabold text-slate-500 uppercase tracking-wider text-[8px] text-indigo-600">👤 AI Background Removal</span>
-                                    <select
-                                      value={c.backgroundReplace || 'none'}
-                                      onChange={(e) => {
-                                        const updated = [...clips];
-                                        updated[i].backgroundReplace = e.target.value;
-                                        onUpdateClipsState(updated);
-                                      }}
-                                      className="bg-white border border-slate-200 px-1.5 py-1 rounded-md text-[9.5px] text-slate-700 font-extrabold outline-none cursor-pointer"
-                                    >
-                                      <option value="none">Original Video Backdrop 🎥</option>
-                                      <option value="birthday">Birthday Balloons Backdrop 🎈</option>
-                                      <option value="wedding">Wedding Rose Gold Hearts 💕</option>
-                                      <option value="corporate">Corporate Pitch Grid Lines 🏢</option>
-                                      <option value="award">Grand Golden Spotlight Stage 🏆</option>
-                                      <option value="church">Church Glowing Arches Back ⛪</option>
-                                      <option value="festival">Festival fireworks sky 🎆</option>
-                                      <option value="luxury">Luxury scarlet velvet 🍷</option>
-                                    </select>
+                                  <div className="flex flex-col gap-1.5">
+                                    <span className="font-extrabold text-slate-500 uppercase tracking-wider text-[8px] text-indigo-600">🎨 Background Theme</span>
+                                    <span className="text-[8px] text-slate-400 -mt-1">
+                                      Shows on text/wish cards, and behind letterboxed clips.{' '}
+                                      {c.type !== 'text' && fitMode !== 'contain' && '(Set canvas fit to "Letterbox" to see it behind video.)'}
+                                    </span>
+                                    <div className="grid grid-cols-4 gap-1">
+                                      {[
+                                        { id: 'none', label: 'Off', emoji: '🎥' },
+                                        { id: 'birthday', label: 'Birthday', emoji: '🎈' },
+                                        { id: 'wedding', label: 'Wedding', emoji: '💕' },
+                                        { id: 'corporate', label: 'Corporate', emoji: '🏢' },
+                                        { id: 'award', label: 'Award', emoji: '🏆' },
+                                        { id: 'church', label: 'Church', emoji: '⛪' },
+                                        { id: 'festival', label: 'Festival', emoji: '🎆' },
+                                        { id: 'luxury', label: 'Luxury', emoji: '🍷' },
+                                      ].map(theme => {
+                                        const active = (c.backgroundReplace || 'none') === theme.id;
+                                        return (
+                                          <button
+                                            key={theme.id}
+                                            type="button"
+                                            title={theme.label}
+                                            onClick={() => {
+                                              const updated = [...clips];
+                                              updated[i].backgroundReplace = theme.id;
+                                              onUpdateClipsState(updated);
+                                            }}
+                                            className={`flex flex-col items-center justify-center gap-0.5 py-1.5 rounded-lg border text-[7.5px] font-bold transition cursor-pointer ${
+                                              active
+                                                ? 'bg-indigo-600 border-indigo-500 text-white'
+                                                : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300'
+                                            }`}
+                                          >
+                                            <span className="text-xs">{theme.emoji}</span>
+                                            <span className="truncate w-full text-center">{theme.label}</span>
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
                                   </div>
 
                                   <div className="flex flex-col justify-center space-y-1">
