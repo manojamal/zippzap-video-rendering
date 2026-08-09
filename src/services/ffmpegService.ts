@@ -143,6 +143,33 @@ export async function tryFetchBytes(url: string): Promise<Uint8Array | null> {
   }
 }
 
+/**
+ * Sniffs an audio file's real container from its magic bytes. Needed for the custom
+ * soundtrack upload: by the time its bytes reach the render pipeline, all that's left is a
+ * blob: URL (which carries no filename/MIME info) and the fetched bytes themselves - so a
+ * WAV, OGG, FLAC, or M4A upload was previously always written to ffmpeg's virtual filesystem
+ * as "soundtrack.mp3" regardless of its actual format. ffmpeg's demuxer trusts the filename
+ * extension as a hint alongside content probing, and for several of those formats picked the
+ * wrong one and failed outright - the render would still complete (the failure is caught and
+ * downgraded to a warning), just silently missing the music the user uploaded.
+ */
+export function guessAudioExtensionFromBytes(bytes: Uint8Array): string {
+  if (bytes.length >= 4) {
+    const sig4 = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]);
+    if (sig4 === 'RIFF') return 'wav';
+    if (sig4 === 'OggS') return 'ogg';
+    if (sig4 === 'fLaC') return 'flac';
+    if (sig4.startsWith('ID3')) return 'mp3';
+  }
+  if (bytes.length >= 8) {
+    const sig4b = String.fromCharCode(bytes[4], bytes[5], bytes[6], bytes[7]);
+    if (sig4b === 'ftyp') return 'm4a';
+  }
+  // MPEG audio frame sync (0xFFEx-0xFFFx) - the common case for a plain .mp3 with no ID3 tag.
+  if (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0) return 'mp3';
+  return 'mp3';
+}
+
 let fontsLoaded = false;
 /** Writes the bundled font files into ffmpeg's FS (used by drawtext for subtitles/overlays). */
 export async function ensureFonts(ffmpeg: FFmpeg): Promise<void> {
