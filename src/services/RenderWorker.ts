@@ -3,6 +3,7 @@ import {
   getFFmpeg,
   toUint8Array,
   tryFetchBytes,
+  guessAudioExtensionFromBytes,
   ensureFonts,
   escapeDrawtext,
   terminateFFmpeg,
@@ -1027,8 +1028,14 @@ export class RenderWorkerService {
         report(88, 'Mixing in soundtrack...');
         const musicBytes = await tryFetchBytes(options.soundtrackUrl);
         if (musicBytes) {          try {
-            await ffmpeg.writeFile('soundtrack.mp3', musicBytes);
-            this.tempFiles.push('soundtrack.mp3');
+            // A custom-uploaded soundtrack only ever reaches this point as a blob: URL - no
+            // filename or MIME type survives that trip - so the real container has to be
+            // sniffed from the bytes themselves. Writing a WAV/OGG/FLAC/M4A upload to a file
+            // literally named "soundtrack.mp3" made ffmpeg's demuxer misidentify the format
+            // and fail outright for anything that wasn't actually an MP3.
+            const soundtrackFile = `soundtrack.${guessAudioExtensionFromBytes(musicBytes)}`;
+            await ffmpeg.writeFile(soundtrackFile, musicBytes);
+            this.tempFiles.push(soundtrackFile);
             const vol = ((options.soundtrackVolume ?? 50) / 100).toFixed(2);
             finalName = 'final.mp4';
 
@@ -1051,7 +1058,7 @@ export class RenderWorkerService {
               // rest. amix's duration=first below still caps the actual output
               // to the video's real length, so this only fills gaps, it never
               // extends the video.
-              '-stream_loop', '-1', '-i', 'soundtrack.mp3',
+              '-stream_loop', '-1', '-i', soundtrackFile,
               '-filter_complex',
               `[1:a]${musicVolumeExpr}[music];[0:a][music]amix=inputs=2:duration=first:dropout_transition=2[aout]`,
               '-map', '0:v', '-map', '[aout]',
@@ -1308,13 +1315,17 @@ export class RenderWorkerService {
         const musicBytes = await tryFetchBytes(options.soundtrackUrl);
         if (musicBytes) {
           try {
-            await ffmpeg.writeFile('audio_soundtrack.mp3', musicBytes);
-            this.tempFiles.push('audio_soundtrack.mp3');
+            // Same container-detection issue as the video path: a custom-uploaded soundtrack
+            // is only ever a blob: URL by the time it gets here, so its real format has to be
+            // sniffed from the bytes rather than assumed to be MP3.
+            const soundtrackFile = `audio_soundtrack.${guessAudioExtensionFromBytes(musicBytes)}`;
+            await ffmpeg.writeFile(soundtrackFile, musicBytes);
+            this.tempFiles.push(soundtrackFile);
             const vol = ((options.soundtrackVolume ?? 50) / 100).toFixed(2);
             const mixedName = 'audio_final.mp3';
             await ffmpeg.exec([
               '-i', finalName,
-              '-stream_loop', '-1', '-i', 'audio_soundtrack.mp3',
+              '-stream_loop', '-1', '-i', soundtrackFile,
               '-filter_complex', `[1:a]volume=${vol}[music];[0:a][music]amix=inputs=2:duration=first:dropout_transition=2[aout]`,
               '-map', '[aout]', '-c:a', 'libmp3lame', '-b:a', '192k',
               mixedName,
