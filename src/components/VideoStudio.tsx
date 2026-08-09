@@ -1522,6 +1522,23 @@ export default function VideoStudio({
     target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  // The app's own global header (logo + nav row) is already position:sticky at top:0 with a
+  // higher z-index, so a naive top-0 on this page's own sticky action bar renders it directly
+  // underneath that header - fully hidden, not just visually stacked. Measuring the real
+  // header height and offsetting by it keeps this bar visible right below the global header
+  // instead of behind it, and stays correct if that header's height ever changes (e.g. it
+  // wraps to two lines on a narrower screen).
+  const [globalHeaderHeight, setGlobalHeaderHeight] = useState(0);
+  useEffect(() => {
+    const headerEl = document.querySelector('header');
+    if (!headerEl) return;
+    const update = () => setGlobalHeaderHeight(headerEl.getBoundingClientRect().height);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(headerEl);
+    return () => ro.disconnect();
+  }, []);
+
   const handleDropzoneDragEnter = (e: React.DragEvent) => {
     e.preventDefault();
     dropzoneDragDepth.current += 1;
@@ -4703,6 +4720,93 @@ export default function VideoStudio({
 
   return (
     <div className="space-y-6">
+      {/* Top action bar - one obvious, always-visible render entry point, matching the
+          reference editor layout's header. Every control here reuses real, already-wired
+          state/handlers (undo/redo stack, autosave indicator, crop aspect, the same
+          handleStartRenderMerged the "Start Final Render Build" button already uses) - none
+          of it is new/fake functionality, just a single clear place to trigger it instead of
+          hunting for one of several render buttons scattered through the page. */}
+      <div
+        className="sticky z-30 -mx-4 md:-mx-8 px-4 md:px-8 py-3 bg-white/95 backdrop-blur border-b border-slate-200 flex flex-wrap items-center justify-between gap-3"
+        style={{ top: globalHeaderHeight }}
+      >
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="text-sm font-black text-slate-900 flex items-center gap-1.5 shrink-0">🎬 ZippZap Studio</span>
+
+          {lastSavedTime && (
+            <div className="flex items-center gap-1.5 text-[9.5px] font-mono text-slate-500 bg-slate-50 border border-slate-150 px-2.5 py-1 rounded-lg">
+              <span className={`w-1.5 h-1.5 rounded-full ${isAutoSaving ? 'bg-amber-400 animate-ping' : 'bg-emerald-500 animate-pulse'}`}></span>
+              <span>{isAutoSaving ? 'Auto-saving...' : `Saved ${lastSavedTime}`}</span>
+            </div>
+          )}
+
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={handleUndo}
+              disabled={undoStack.length === 0}
+              title="Undo last action (Ctrl+Z)"
+              className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition"
+            >
+              ↩️
+            </button>
+            <button
+              type="button"
+              onClick={handleRedo}
+              disabled={redoStack.length === 0}
+              title="Redo (Ctrl+Shift+Z)"
+              className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition"
+            >
+              ↪️
+            </button>
+          </div>
+
+          <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
+            {(['16:9', '9:16', '1:1', '4:3'] as const).map((asp) => (
+              <button
+                key={`topbar-${asp}`}
+                type="button"
+                onClick={() => setCropAspect(asp)}
+                title={`Canvas aspect ratio: ${asp}`}
+                className={`px-2 py-1 text-[9.5px] font-black rounded-md transition cursor-pointer ${
+                  cropAspect === asp ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {asp}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => {
+              if (clips.length === 0) {
+                alert('Your stitching bin is empty! Load video files or quick-import library materials below.');
+                return;
+              }
+              setPreviewClipIdx(0);
+              setPreviewTimer(0);
+              setPreviewPlaying(true);
+              setExportPreviewOpen(true);
+            }}
+            className="px-3.5 py-2 border border-slate-200 hover:border-indigo-400 bg-white text-slate-700 font-extrabold text-xs rounded-xl transition cursor-pointer flex items-center gap-1.5"
+          >
+            <span>▶️</span> Preview
+          </button>
+          <button
+            type="button"
+            onClick={handleStartRenderMerged}
+            disabled={rendering}
+            data-testid="topbar-render-video"
+            className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:opacity-60 disabled:cursor-not-allowed text-white font-black text-xs rounded-xl shadow-lg transition cursor-pointer flex items-center gap-1.5"
+          >
+            <span>{rendering ? '⏳' : '🎬'}</span> {rendering ? `Rendering ${renderProgress}%` : 'Render Video'}
+          </button>
+        </div>
+      </div>
+
       {/* Floating Render & Deliver status - fixed so it's visible no matter where on the
           page the user is scrolled to. Fixes a real bug: handleExportMovie (triggered by
           Quick Stitch, or any future trigger outside the fullscreen preview) used to only
