@@ -5086,8 +5086,10 @@ export default function VideoStudio({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column Settings block */}
-        <div className="lg:col-span-7 space-y-6">
+        {/* Left Column Settings block - ordered after the preview on any screen narrower than
+            lg (tablet/mobile), so the preview isn't buried thousands of pixels down a stacked
+            single-column layout below every settings panel. */}
+        <div className="order-2 lg:order-none lg:col-span-7 space-y-6">
 
           {/* ✨ 1-CLICK READY-MADE EVENT TEMPLATES */}
           <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm space-y-4">
@@ -8556,14 +8558,20 @@ export default function VideoStudio({
                 )}
                 {BUILTIN_MUSIC.map(m => (
                   <option key={m.id} value={m.id}>
-                    {m.e} {m.n} ({m.g} - {m.d})
+                    🔒 {m.e} {m.n} ({m.g} - {m.d}) - preview only
                   </option>
                 ))}
               </select>
 
               {soundtrackId !== 'none' && soundtrackId !== 'custom' && (
-                <p className="text-[9px] text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-1.5 leading-snug">
-                  ⚠️ Built-in tracks are hosted externally and can occasionally fail to embed into your exported video due to a cross-origin restriction on that host (it'll still play fine here in the live preview either way). If your exported video comes out without music, upload your own MP3 below for a guaranteed, reliable result.
+                <p className="text-[9.5px] text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-2.5 py-2 leading-snug font-semibold">
+                  🔒 This built-in track will NOT be in your downloaded video. The host that
+                  serves it (soundhelix.com) doesn't allow this site to read the audio file -
+                  browsers block that by default (a cross-origin/CORS restriction), and there's
+                  no way around it from here. It plays fine in this live preview because preview
+                  playback doesn't need to read the file, only embedding into the export does.
+                  <br /><b>To actually get music in your download, upload your own MP3 below</b> -
+                  that always works.
                 </p>
               )}
 
@@ -8638,12 +8646,19 @@ export default function VideoStudio({
           </div>
         </div>
 
-        {/* Right column Live Canvas Preview */}
-        <div id="video-studio-preview-col" className="lg:col-span-5 space-y-6">
+        {/* Right column Live Canvas Preview - ordered first below lg (see the settings column's
+            order-2 above), so it's the first thing visible on tablet/mobile instead of sitting
+            beneath every settings panel in a stacked single-column layout. */}
+        <div id="video-studio-preview-col" className="order-1 lg:order-none lg:col-span-5 space-y-6">
 
-          {/* Sticky preview: stays visible while the long settings column (left, or the rest of
-              this column below) scrolls past it - the "preview is always on screen" pattern from
-              the reference AI-studio-style layout, without restructuring the surrounding page. */}
+          {/* Sticky preview: stays visible while the long settings column scrolls past it.
+              Deliberately still gated at lg: (matching the grid's own lg:grid-cols-12 - below
+              that the layout is a single stacked column, and sticky only holds while its own
+              containing block is in view; tried enabling this at md: while the grid was still
+              single-column and it just unstuck and scrolled away after its own short column
+              ended, going negative - worse than not sticky at all). Below lg, the preview is a
+              normal block instead, but now ordered first (see order-1 above) so it's the first
+              thing visible on tablet/mobile rather than sitting beneath every settings panel. */}
           <div className="lg:sticky lg:top-4 lg:z-10">
           <div className="bg-slate-950 border border-slate-900 rounded-3xl overflow-hidden shadow-lg select-none">
             {/* Quick aspect ratio selector bar */}
